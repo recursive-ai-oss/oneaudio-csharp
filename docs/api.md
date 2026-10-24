@@ -33,7 +33,11 @@ Everything is in namespace `OneAudio`. Units: a **frame** is one sample per chan
 
 ## Resampling
 
-`IResampler` (interface only for now): `Channels`, `Quality` (`Linear` or `Polyphase`), `Ratio` / `SetRatio`, `LatencyFrames`, `MaxOutputFrames`, `Process(input, output, out used, out written)`, `Flush`, `Reset`. Implementations allocate at construction and never in `Process`.
+`AudioResampler.Create(channels, quality, ratio, options?)` (or `Create(inRate, outRate, channels, quality, options?)`) returns an `IResampler` for interleaved float audio: `Channels`, `Quality`, `Ratio` / `SetRatio`, `LatencyFrames`, `MaxOutputFrames`, `Process(input, output, out used, out written)`, `Flush`, `Reset`. Everything is allocated at creation; `Process`, `SetRatio`, `Flush` and `Reset` allocate nothing. Output is identical however the input is split into blocks.
+
+- **Modes:** `Linear` (two-tap, cheapest), `PolyphaseFast` (44-tap Kaiser-windowed sinc, flat to 0.8 of the lower Nyquist frequency, about 75 dB alias rejection) and `Polyphase` (144-tap, flat within 0.05 dB to 0.9 of the lower Nyquist frequency, 100 dB+ rejection, THD+N below -100 dB). Polyphase blends two of 512 coefficient phases per output frame; below ratio 1 the filter stretches so its cutoff follows the output Nyquist frequency.
+- **Time alignment:** output frame m is the signal at input time m / ratio; filter delay is compensated. `LatencyFrames` is the look-ahead in output frames: after N input frames about N * ratio - LatencyFrames output frames exist. `Flush` returns the rest (call until it returns 0).
+- **Ratio:** `ResamplerOptions.MinRatio` (default 0.25) and `MaxRatio` (default 16) bound `SetRatio` and size the preallocated state (polyphase memory grows as 1 / MinRatio). `SetRatio` is glitch-free: the read position is continuous. In polyphase modes, a ratio below 1 that moves the cutoff by more than a few percent redesigns the coefficient bank inside `SetRatio` (allocation-free, but roughly 0.3 ms of work at ratio 0.5 to 1), so bend pitch with ratio changes of a few percent per call rather than per frame.
 
 ## Mixing
 
