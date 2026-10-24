@@ -54,6 +54,8 @@ project_for() {
 seed() {
   local target="$1" corpus="$2"
   mkdir -p "$corpus"
+  # Earlier crashing inputs (already fixed) stay in the corpus as regression seeds.
+  if [ -d "$here/testdata/fuzz/$target" ]; then cp -n "$here/testdata/fuzz/$target"/* "$corpus/"; fi
   case "$target" in
     wav)         find "$here/testdata" -type f \( -iname '*.wav' -o -iname '*.wave' \) -size -64k -exec cp -n {} "$corpus/" \; ;;
     ogg|vorbis)  find "$here/testdata" -type f -iname '*.ogg' -size -1024k -exec cp -n {} "$corpus/" \; 2>/dev/null || true
@@ -63,7 +65,11 @@ seed() {
                      head -c 65536 "$f" > "$corpus/$(basename "$f" .ogg).seed"
                    done
                  fi ;;
-    opus)        find "$here/testdata" -type f -iname '*.opus' -exec cp -n {} "$corpus/" \; 2>/dev/null || true ;;
+    opus)        # The first byte picks the mode; odd means "the rest is an Ogg Opus file".
+                 find "$here/testdata" -type f -iname '*.opus' -size -1024k | while read -r f; do
+                   { printf '\001'; head -c 65536 "$f"; } > "$corpus/$(basename "$f" .opus).seed"
+                 done
+                 head -c 600 /dev/urandom | { printf '\000'; cat; } > "$corpus/random-packets.seed" ;;
   esac
   if [ -z "$(ls -A "$corpus")" ]; then printf 'RIFF' > "$corpus/empty.seed"; fi
 }
