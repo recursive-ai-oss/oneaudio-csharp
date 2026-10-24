@@ -1,0 +1,29 @@
+<Project>
+  <PropertyGroup>
+    <!-- Defined once so a rename stays cheap. -->
+    <OneAudioPackageId>RecursiveAI.OneAudio</OneAudioPackageId>
+    <RootNamespace>OneAudio</RootNamespace>
+    <PackageLicenseExpression>MIT OR Apache-2.0</PackageLicenseExpression>
+    <Authors>Recursive AI, LLC</Authors>
+    <Copyright>Copyright (c) Recursive AI, LLC</Copyright>
+
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Build output stays outside the checkout. -->
+    <ONEAUDIO_ARTIFACTS Condition="'$(ONEAUDIO_ARTIFACTS)' == ''">$(MSBuildThisFileDirectory)../.oneaudio-artifacts</ONEAUDIO_ARTIFACTS>
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+    <ArtifactsPath>$(ONEAUDIO_ARTIFACTS)</ArtifactsPath>
+  </PropertyGroup>
+</Project>

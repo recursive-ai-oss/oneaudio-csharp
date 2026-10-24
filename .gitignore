@@ -1,0 +1,21 @@
+# Allowlist: ignore everything, then name what is tracked.
+/*
+!/.gitignore
+!/.github
+!/global.json
+!/Directory.Build.props
+!/OneAudio.slnx
+!/LICENSE-MIT
+!/LICENSE-APACHE
+!/README.md
+!/docs
+!/src
+!/tests
+!/bench
+!/fuzz
+!/tools
+!/testdata
+bin/
+obj/
+artifacts/
+BenchmarkDotNet.Artifacts/

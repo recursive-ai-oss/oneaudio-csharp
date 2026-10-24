@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>$(OneAudioPackageId)</PackageId>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <Description>Audio decode, encode, resample, mix and analyse for .NET, with no dependencies beyond the base class library.</Description>
+    <!-- Kernels/ is the only place unsafe code is allowed. It lives in this assembly, and AllowUnsafeBlocks
+         stays false until a kernel needs it. When one does, the kernels move to their own internal assembly
+         so the parsing code can never be compiled with unsafe enabled. -->
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="OneAudio.Tests" />
+  </ItemGroup>
+</Project>
