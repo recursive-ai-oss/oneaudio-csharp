@@ -74,6 +74,36 @@ if (!mixer.TryGetEvent(out var ev) || ev.Kind != MixerEventKind.VoiceEnded) retu
     if (centre < 0.02f || centre > 0.05f) return Fail($"surround mix silent ({centre})");
 }
 
+foreach (var q in new[] { ResamplerQuality.Linear, ResamplerQuality.Polyphase, ResamplerQuality.PolyphaseFast })
+{
+    var rs = AudioResampler.Create(Rate, 44_100, 1, q);
+    var rin = new float[Frames];
+    for (int i = 0; i < Frames; i++) rin[i] = MathF.Sin(2 * MathF.PI * 440 * i / Rate);
+    var rout = new float[rs.MaxOutputFrames(Frames) + 4096];
+    rs.Process(rin, rout, out int ru, out int rw);
+    rw += rs.Flush(rout.AsSpan(rw));
+    if (ru != Frames || rw < Frames * 44_100 / Rate - 2 || rw > Frames * 44_100 / Rate + 2) return Fail($"resample {q}: used {ru}, wrote {rw}");
+}
+
+// Per-voice conversion and pitch through the library's own resamplers (rate mismatch, pitched, polyphase).
+{
+    var tone = new float[44_100];
+    for (int i = 0; i < tone.Length; i++) tone[i] = 0.5f * MathF.Sin(2 * MathF.PI * 1000 * i / 44_100);
+    var mr = new AudioMixer(new MixerOptions { SampleRate = Rate, Channels = 2, MaxVoices = 4 });
+    var toneClip = new AudioClip(new AudioFormat(44_100, 1), tone);
+    var fast = mr.Play(new PlayParams(toneClip));
+    var bent = mr.Play(new PlayParams(toneClip) { Loop = true, VariablePitch = true, Resampling = ResamplerQuality.Polyphase, Gain = 0.1f });
+    var outr = new float[2 * 1024];
+    float peak = 0;
+    for (int pass = 0; pass < 10; pass++)
+    {
+        mr.SetPitch(bent, 1f + pass * 0.05f);
+        mr.Render(outr);
+        for (int i = 0; i < outr.Length; i++) peak = MathF.Max(peak, MathF.Abs(outr[i]));
+    }
+    if (!fast.IsValid || !bent.IsValid || peak < 0.2f || mr.DroppedConverterRequests != 0) return Fail($"converted voices (peak {peak})");
+}
+
 Console.WriteLine($"ok: {Frames} frames decoded, mixed peak L={peakL:F3} R={peakR:F3}, underruns={mixer.UnderrunEvents}");
 return 0;
 

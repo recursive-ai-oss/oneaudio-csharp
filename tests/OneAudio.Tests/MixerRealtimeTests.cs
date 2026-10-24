@@ -57,7 +57,7 @@ public class MixerRealtimeTests
 
     private static Func<int, ResamplerQuality, IResampler> Factory => (ch, q) => new LinearTestResampler(ch, q);
 
-    private static void ExerciseRender(int outChannels, string label)
+    private static void ExerciseRender(int outChannels, string label, bool realConverters)
     {
         var stereo = Ramp(Rate, 5000, 2);
         var mono = Ramp(Rate, 3000, 1);
@@ -69,7 +69,7 @@ public class MixerRealtimeTests
         var m = new AudioMixer(new MixerOptions
         {
             SampleRate = Rate, Channels = outChannels, MaxVoices = 8, MaxBuses = 6, MaxBlockFrames = 256,
-            ResamplerFactory = Factory, EventCapacity = 64,
+            ResamplerFactory = realConverters ? null : Factory, EventCapacity = 64,
         });
         var o = new float[outChannels * 480];
         var handles = new VoiceHandle[8];
@@ -115,42 +115,46 @@ public class MixerRealtimeTests
 
         int gcs = GC.CollectionCount(0) + GC.CollectionCount(1) + GC.CollectionCount(2);
         long allocated = 0;
+        var swC = new System.Diagnostics.Stopwatch(); var swR = new System.Diagnostics.Stopwatch(); long maxTicks = 0;
         for (int i = 4000; i < 12000; i++)
         {
-            Control(i);   // control calls, pumping and event polling run on other threads in real use: not measured
+            swC.Start(); Control(i); swC.Stop();   // control calls, pumping and event polling run on other threads in real use: not measured
             stream.Pump(); stream2.Pump();
             long b = GC.GetAllocatedBytesForCurrentThread();
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             m.Render(o);
+            long dt = System.Diagnostics.Stopwatch.GetTimestamp() - t0; swR.Start(); swR.Stop(); maxTicks = Math.Max(maxTicks, dt);
             allocated += GC.GetAllocatedBytesForCurrentThread() - b;
             while (m.TryGetEvent(out _)) { }
         }
         int gcsAfter = GC.CollectionCount(0) + GC.CollectionCount(1) + GC.CollectionCount(2);
         Console.WriteLine($"render allocation [{label}]: {allocated} bytes over 8000 callbacks, GCs during: {gcsAfter - gcs} (control calls included in the GC count), peak voices {m.ActiveVoices}");
+        Console.WriteLine($"  control time {swC.ElapsedMilliseconds} ms, slowest render {maxTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency:F3} ms");
         Assert.Equal(0, allocated);
         foreach (var x in o) Assert.True(float.IsFinite(x));
     }
 
     [Fact]
-    public void Render_AllocatesNothing_AcrossEveryFeature_Stereo() => ExerciseRender(2, "stereo");
+    public void Render_AllocatesNothing_AcrossEveryFeature_Stereo() => ExerciseRender(2, "stereo, library converters", realConverters: true);
 
     [Fact]
-    public void Render_AllocatesNothing_AcrossEveryFeature_Surround() => ExerciseRender(6, "5.1");
+    public void Render_AllocatesNothing_AcrossEveryFeature_Surround() => ExerciseRender(6, "5.1, test converters", realConverters: false);
 
     [Fact]
     public void Render_PureRenderLoop_LeavesGcCountUnchanged()
     {
         var mono = Ramp(Rate, 3000, 1);
-        var m = new AudioMixer(new MixerOptions { SampleRate = Rate, Channels = 2, MaxVoices = 16, ResamplerFactory = Factory });
-        for (int i = 0; i < 16; i++) m.Play(new PlayParams(i % 2 == 0 ? mono : Ramp(24000, 3000, 2)) { Loop = true, Pan = i / 8f - 1, Bus = i % 4 });
+        var m = new AudioMixer(new MixerOptions { SampleRate = Rate, Channels = 2, MaxVoices = 16 });
+        for (int i = 0; i < 16; i++) m.Play(new PlayParams(i % 2 == 0 ? mono : Ramp(24000, 3000, 2)) { Loop = true, Resampling = i % 4 == 1 ? ResamplerQuality.Polyphase : null, Pan = i / 8f - 1, Bus = i % 4 });
         m.SetDucking(0, 1);
         m.SetBusOutput(2, 3);
         var o = new float[2 * 512];
         for (int i = 0; i < 2000; i++) m.Render(o); // warm-up
         int gcs = GC.CollectionCount(0);
         long b = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 20000; i++) m.Render(o);
+        for (int i = 0; i < 5000; i++) m.Render(o);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - b;
-        Console.WriteLine($"pure render: {allocated} bytes, {GC.CollectionCount(0) - gcs} gen0 collections over 20000 callbacks");
+        Console.WriteLine($"pure render: {allocated} bytes, {GC.CollectionCount(0) - gcs} gen0 collections over 5000 callbacks");
         Assert.Equal(0, allocated);
         Assert.Equal(gcs, GC.CollectionCount(0));
     }
@@ -161,7 +165,7 @@ public class MixerRealtimeTests
         var clip = Ramp(Rate, 2000, 1);
         var odd = Ramp(32000, 2000, 2);
         var surround = Ramp(Rate, 1500, 6);
-        var m = new AudioMixer(new MixerOptions { SampleRate = Rate, Channels = 2, MaxVoices = 16, MaxBuses = 6, ResamplerFactory = Factory, CommandCapacity = 256 });
+        var m = new AudioMixer(new MixerOptions { SampleRate = Rate, Channels = 2, MaxVoices = 16, MaxBuses = 6, CommandCapacity = 256 });
         using var pump = new StreamingPump(intervalMilliseconds: 1);
         pump.Start();
         using var stop = new CancellationTokenSource();

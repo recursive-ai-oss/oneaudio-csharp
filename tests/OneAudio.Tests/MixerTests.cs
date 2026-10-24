@@ -118,7 +118,7 @@ public class MixerTests
         var m = Mixer();
         Assert.True(m.Stop(new VoiceHandle(999)));
         m.Render(new float[4]);
-        Assert.Throws<ArgumentException>(() => m.Play(new PlayParams(new AudioClip(new AudioFormat(44100, 1), [0f]))));
+        Assert.Throws<ArgumentOutOfRangeException>(() => m.Play(new PlayParams(new AudioClip(new AudioFormat(1, 1), [0f])))); // ratio far outside the converter range
         Assert.Throws<ArgumentException>(() => m.Play(new PlayParams(new AudioClip(new AudioFormat(Rate, 9), new float[9]))));
         Assert.Throws<ArgumentOutOfRangeException>(() => m.Play(new PlayParams(Ramp(1)) { Bus = 99 }));
     }

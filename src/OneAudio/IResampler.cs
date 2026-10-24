@@ -7,6 +7,8 @@ public enum ResamplerQuality
     Linear = 0,
     /// <summary>Windowed-sinc polyphase filter bank. Band-limited, with latency reported by <see cref="IResampler.LatencyFrames"/>.</summary>
     Polyphase = 1,
+    /// <summary>A shorter windowed-sinc polyphase filter (about 60 % of the cost of <see cref="Polyphase"/>): flat to 0.8 of the lower Nyquist frequency with roughly 70 dB of alias rejection. For real-time pitch shifting where <see cref="Linear"/> aliases too much.</summary>
+    PolyphaseFast = 2,
 }
 
 /// <summary>
@@ -35,8 +37,11 @@ public interface IResampler
     void SetRatio(double ratio);
 
     /// <summary>
-    /// Delay the converter adds, in output frames: a feature at input time t appears in the output at t + latency.
-    /// Zero (or near it) for <see cref="ResamplerQuality.Linear"/>.
+    /// Look-ahead the converter needs, in output frames. Output frame m always represents input time m / <see cref="Ratio"/>
+    /// (the filter's own group delay is compensated, so an impulse at input frame n peaks at output frame n * ratio),
+    /// but an output frame can only be produced once the input has advanced past it by this much: after N input frames
+    /// the converter has produced about N * ratio - LatencyFrames output frames. <see cref="Flush"/> supplies the rest.
+    /// Changes with the ratio.
     /// </summary>
     double LatencyFrames { get; }
 

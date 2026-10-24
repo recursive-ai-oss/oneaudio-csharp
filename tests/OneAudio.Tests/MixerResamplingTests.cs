@@ -11,6 +11,7 @@ public class MixerResamplingTests
         {
             SampleRate = Rate, Channels = channels, MaxVoices = voices, MaxBlockFrames = block,
             ResamplerFactory = factory ?? ((ch, q) => new LinearTestResampler(ch, q)),
+            PreallocatedConverters = [],
         });
 
     private static AudioClip RampClip(int rate, int frames, int channels = 1)
@@ -185,21 +186,53 @@ public class MixerResamplingTests
     [Fact]
     public void Play_NeedingConverter_Validates()
     {
+        // Without a custom factory the library's resamplers are used.
         var plain = new AudioMixer(new MixerOptions { SampleRate = Rate });
-        Assert.Throws<ArgumentException>(() => plain.Play(new PlayParams(RampClip(44100, 4))));
-        Assert.Throws<ArgumentException>(() => plain.Play(new PlayParams(RampClip(Rate, 4)) { Pitch = 2f }));
-        Assert.True(plain.Play(new PlayParams(RampClip(Rate, 4))).IsValid);
+        Assert.True(plain.Play(new PlayParams(RampClip(44100, 4))).IsValid);
+        Assert.True(plain.Play(new PlayParams(RampClip(Rate, 4)) { Pitch = 2f }).IsValid);
+        // The ratio is checked against the converter range on the control thread.
+        Assert.Throws<ArgumentOutOfRangeException>(() => plain.Play(new PlayParams(RampClip(1, 4))));
+        Assert.Throws<ArgumentOutOfRangeException>(() => plain.Play(new PlayParams(RampClip(Rate, 4)) { Pitch = 4f })); // ratio 0.25 < 0.5
+        var wide = new AudioMixer(new MixerOptions { SampleRate = Rate, ConverterMinRatio = 0.25 });
+        Assert.True(wide.Play(new PlayParams(RampClip(Rate, 4)) { Pitch = 4f }).IsValid);
 
-        var wrong = new AudioMixer(new MixerOptions { SampleRate = Rate, ResamplerFactory = (_, q) => new LinearTestResampler(1, q) });
+        var wrong = new AudioMixer(new MixerOptions { SampleRate = Rate, PreallocatedConverters = [], ResamplerFactory = (_, q) => new LinearTestResampler(1, q) });
         Assert.Throws<InvalidOperationException>(() => wrong.Play(new PlayParams(RampClip(24000, 4, channels: 2))));
+    }
 
-        var picky = new AudioMixer(new MixerOptions
+    [Fact]
+    public void ConverterCap_RefusesPlay_AndEvictsIdleConvertersOfOtherKinds()
+    {
+        var m = new AudioMixer(new MixerOptions
         {
-            SampleRate = Rate,
-            ResamplerFactory = (c, q) => new LinearTestResampler(c, q),
+            SampleRate = Rate, Channels = 2, MaxVoices = 8, MaxConvertedVoices = 2,
+            PreallocatedConverters = [new ConverterReservation(1, ResamplerQuality.Linear, 2)],
         });
-        // A ratio the converter refuses surfaces on the control thread, not in Render.
-        Assert.Throws<ArgumentOutOfRangeException>(() => picky.Play(new PlayParams(RampClip(1, 4))));
+        var stereo = RampClip(24000, 4000, channels: 2);
+        Assert.True(m.Play(new PlayParams(stereo)).IsValid);   // idle mono converters make room for a stereo one
+        Assert.True(m.Play(new PlayParams(stereo)).IsValid);
+        Assert.False(m.Play(new PlayParams(stereo)).IsValid);  // both converters are busy
+        Assert.Equal(1, m.DroppedConverterRequests);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new AudioMixer(new MixerOptions
+        {
+            MaxVoices = 4, MaxConvertedVoices = 1, PreallocatedConverters = [new ConverterReservation(1, ResamplerQuality.Linear, 2)],
+        }));
+    }
+
+    [Fact]
+    public void DefaultQuality_FollowsTheKindOfConversion()
+    {
+        var seen = new List<ResamplerQuality>();
+        var m = new AudioMixer(new MixerOptions
+        {
+            SampleRate = Rate, Channels = 1, PreallocatedConverters = [],
+            ResamplerFactory = (ch, q) => { seen.Add(q); return new LinearTestResampler(ch, q); },
+        });
+        m.Play(new PlayParams(RampClip(24000, 100)));                                   // rate only
+        m.Play(new PlayParams(RampClip(Rate, 100)) { Pitch = 1.5f });                    // pitched
+        m.Play(new PlayParams(RampClip(Rate, 100)) { VariablePitch = true });            // reserved for SetPitch
+        m.Play(new PlayParams(RampClip(24000, 100)) { Resampling = ResamplerQuality.Polyphase });
+        Assert.Equal([ResamplerQuality.PolyphaseFast, ResamplerQuality.Linear, ResamplerQuality.Linear, ResamplerQuality.Polyphase], seen);
     }
 
     [Fact]

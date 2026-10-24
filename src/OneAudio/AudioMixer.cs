@@ -44,13 +44,88 @@ public sealed record MixerOptions
     public double SmoothingMilliseconds { get; init; } = 10.0;
 
     /// <summary>
-    /// Creates the sample-rate converters voices use when a source's rate differs from <see cref="SampleRate"/> or a voice
-    /// is pitched. Called on the control thread (inside <see cref="AudioMixer.Play"/>), never on the render thread, with the
-    /// source's channel count and the voice's requested quality; it must return a converter of exactly that channel count.
-    /// Converters are recycled between voices. When null, only sources at the mixer's rate and unpitched voices can play.
-    /// Default null.
+    /// Replaces the built-in converters (<see cref="AudioResampler"/>) with your own. Called on the control thread with the
+    /// source's channel count and the quality; it must return a converter of exactly that channel count whose ratio range covers
+    /// <see cref="ConverterMinRatio"/> to <see cref="ConverterMaxRatio"/>. Default null: use the library's resamplers.
     /// </summary>
     public Func<int, ResamplerQuality, IResampler>? ResamplerFactory { get; init; }
+
+    /// <summary>
+    /// Lowest conversion ratio (output rate / input rate, including pitch) a voice may reach. A voice needs a converter when its
+    /// source's rate differs from <see cref="SampleRate"/> or it is pitched; its ratio is <c>SampleRate / (sourceRate * pitch)</c>.
+    /// The polyphase filter widens as the ratio falls, so converter memory scales with <c>1 / min(1, ConverterMinRatio)</c>:
+    /// a <see cref="ResamplerQuality.Polyphase"/> converter takes about 0.3 MB at 1.0, 0.6 MB at 0.5 (the default) and 1.2 MB at 0.25
+    /// (<see cref="ResamplerQuality.PolyphaseFast"/> is smaller, <see cref="ResamplerQuality.Linear"/> negligible). Play rejects a
+    /// voice whose starting ratio is outside this range, and <see cref="AudioMixer.SetPitch"/> clamps to it. Range 1/64 to
+    /// <see cref="ConverterMaxRatio"/>. Default 0.5: a 96 kHz source at pitch 1, or a 48 kHz source up to an octave higher.
+    /// </summary>
+    public double ConverterMinRatio { get; init; } = 0.5;
+
+    /// <summary>Highest conversion ratio a voice may reach (heavy slow-down of a low-rate source). Costs no memory. Range <see cref="ConverterMinRatio"/> to 64. Default 16.</summary>
+    public double ConverterMaxRatio { get; init; } = 16.0;
+
+    /// <summary>
+    /// Converters built when the mixer is created, so the first voices that need one do not pay for it (the shared filter tables
+    /// are built here, never on a render or play call). Beyond these, converters are created on demand inside <c>Play</c> on the
+    /// control thread, up to <see cref="MaxConvertedVoices"/>, and recycled afterwards. Memory is as described at
+    /// <see cref="ConverterMinRatio"/>, per converter. The default holds 4 mono and 4 stereo <see cref="ResamplerQuality.Linear"/>,
+    /// 2 mono and 2 stereo <see cref="ResamplerQuality.PolyphaseFast"/> and 1 mono and 1 stereo <see cref="ResamplerQuality.Polyphase"/>
+    /// converter, about 2.5 MB with the default ratio range, trimmed to <see cref="MaxConvertedVoices"/> (and to
+    /// <see cref="MaxSourceChannels"/>). Null selects that default; an empty list reserves nothing; an explicit list must fit
+    /// within <see cref="MaxConvertedVoices"/>.
+    /// </summary>
+    public IReadOnlyList<ConverterReservation>? PreallocatedConverters { get; init; }
+
+    internal static readonly ConverterReservation[] DefaultReservations =
+    [
+        new(1, ResamplerQuality.Linear, 4), new(2, ResamplerQuality.Linear, 4),
+        new(1, ResamplerQuality.PolyphaseFast, 2), new(2, ResamplerQuality.PolyphaseFast, 2),
+        new(1, ResamplerQuality.Polyphase, 1), new(2, ResamplerQuality.Polyphase, 1),
+    ];
+
+    internal List<ConverterReservation> ResolveReservations()
+    {
+        int cap = MaxConvertedVoices < 0 ? MaxVoices : MaxConvertedVoices;
+        var result = new List<ConverterReservation>();
+        if (PreallocatedConverters != null)
+        {
+            long total = 0;
+            foreach (var r in PreallocatedConverters)
+            {
+                if (r == null || r.Channels < 1 || r.Channels > MaxSourceChannels || r.Count < 0 || !Enum.IsDefined(r.Quality))
+                    throw new ArgumentOutOfRangeException(nameof(PreallocatedConverters), "Invalid converter reservation.");
+                total += r.Count;
+                result.Add(r);
+            }
+            if (total > cap) throw new ArgumentOutOfRangeException(nameof(PreallocatedConverters), "More converters reserved than MaxConvertedVoices allows.");
+            return result;
+        }
+        int left = cap;
+        foreach (var r in DefaultReservations)
+        {
+            if (r.Channels > MaxSourceChannels || left <= 0) continue;
+            int n = Math.Min(r.Count, left);
+            left -= n;
+            result.Add(r with { Count = n });
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Most converters that may exist at once, which bounds converter memory. A <c>Play</c> that needs a converter when all are
+    /// in use (idle ones of other kinds are dropped to make room) returns an invalid handle and counts in <see cref="AudioMixer.DroppedConverterRequests"/>. -1 means
+    /// <see cref="MaxVoices"/> (no voice is ever refused). Default -1.
+    /// </summary>
+    public int MaxConvertedVoices { get; init; } = -1;
+
+    /// <summary>
+    /// Most expensive ratio changes the render thread performs per pass across all voices. Moving a polyphase voice's ratio by more
+    /// than a few percent while it is below 1 makes the converter redesign its filter bank (about 0.3 ms, no allocation); a pitch bend
+    /// on many voices could otherwise do dozens of those in one callback. Over-budget voices keep their previous ratio for that pass and
+    /// are retried in turn on the next ones, so their pitch lags by at most a few percent. Linear converters are never limited.
+    /// Default 2 (about 0.6 ms worst case per pass); <see cref="int.MaxValue"/> disables the limit.
+    /// </summary>
+    public int RatioRedesignsPerPass { get; init; } = 2;
 
     internal void Validate()
     {
@@ -69,8 +144,19 @@ public sealed record MixerOptions
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxBlockFrames, 65536);
         if (!double.IsFinite(SmoothingMilliseconds) || SmoothingMilliseconds < 0 || SmoothingMilliseconds > 1000)
             throw new ArgumentOutOfRangeException(nameof(SmoothingMilliseconds));
+        if (!(ConverterMinRatio >= 1.0 / 64 && ConverterMinRatio <= ConverterMaxRatio && ConverterMaxRatio <= 64))
+            throw new ArgumentOutOfRangeException(nameof(ConverterMinRatio), "Converter ratios must satisfy 1/64 <= min <= max <= 64.");
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaxConvertedVoices, -1);
+        ArgumentOutOfRangeException.ThrowIfNegative(RatioRedesignsPerPass);
+        ResolveReservations();
     }
 }
+
+/// <summary>A number of converters of one kind to build when the mixer is created.</summary>
+/// <param name="Channels">Channel count of the sources they will convert (1 to <see cref="MixerOptions.MaxSourceChannels"/>).</param>
+/// <param name="Quality">Converter quality.</param>
+/// <param name="Count">How many to build.</param>
+public sealed record ConverterReservation(int Channels, ResamplerQuality Quality, int Count);
 
 /// <summary>Identifies one playing instance of a sound. Handles are never reused; a stale handle is simply ignored by control calls.</summary>
 /// <param name="Id">Unique id, positive for a real voice.</param>
@@ -128,24 +214,27 @@ public readonly record struct PlayParams
 
     /// <summary>
     /// Playback speed multiplier, which also shifts pitch: 2 plays an octave up at twice the speed. Range
-    /// <see cref="AudioMixer.MinPitch"/> to <see cref="AudioMixer.MaxPitch"/>. A value other than 1 needs
-    /// <see cref="MixerOptions.ResamplerFactory"/>. Default 1.
+    /// <see cref="AudioMixer.MinPitch"/> to <see cref="AudioMixer.MaxPitch"/>, and the resulting conversion ratio must lie within
+    /// <see cref="MixerOptions.ConverterMinRatio"/> to <see cref="MixerOptions.ConverterMaxRatio"/>. Default 1.
     /// </summary>
     public float Pitch { get; init; } = 1f;
 
     /// <summary>
     /// Reserve a converter even though the voice starts at pitch 1 and the source's rate matches, so that
-    /// <see cref="AudioMixer.SetPitch"/> can change the pitch later. Without it (and without a rate mismatch or
-    /// <see cref="Pitch"/> other than 1) <see cref="AudioMixer.SetPitch"/> has no effect on the voice. Default false.
+    /// <see cref="AudioMixer.SetPitch"/> can change the pitch later. The converter then runs for the whole voice (a ratio of 1 is
+    /// still filtered, with a 0.95 x Nyquist cutoff) so that the pitch can move without a start-up transient. Without it (and
+    /// without a rate mismatch or <see cref="Pitch"/> other than 1) <see cref="AudioMixer.SetPitch"/> has no effect on the voice. Default false.
     /// </summary>
     public bool VariablePitch { get; init; }
 
     /// <summary>
-    /// Quality of the converter used for rate conversion and pitch. <see cref="ResamplerQuality.Linear"/> is cheap and
-    /// suits effects; <see cref="ResamplerQuality.Polyphase"/> is band-limited and suits music and voice-over, at a latency of
-    /// its filter delay. Default <see cref="ResamplerQuality.Linear"/>.
+    /// Quality of the converter used for rate conversion and pitch. Null (the default) chooses: <see cref="ResamplerQuality.PolyphaseFast"/>
+    /// when only the sample rate differs, <see cref="ResamplerQuality.Linear"/> for pitched voices (<see cref="Pitch"/> other than 1 or
+    /// <see cref="VariablePitch"/>), which is cheap and can bend freely. <see cref="ResamplerQuality.Polyphase"/> has the best rejection and
+    /// the highest cost; polyphase voices that bend pitch below ratio 1 are subject to <see cref="MixerOptions.RatioRedesignsPerPass"/>.
+    /// Converters add look-ahead latency that the converter compensates for; a voice's end is delivered through the converter's flush.
     /// </summary>
-    public ResamplerQuality Resampling { get; init; }
+    public ResamplerQuality? Resampling { get; init; }
 }
 
 /// <summary>What a <see cref="MixerEvent"/> reports.</summary>
@@ -238,7 +327,12 @@ public sealed partial class AudioMixer
     private readonly int _maxSrcChannels;
     private readonly int _smoothFrames;
     private readonly ChannelMask _outMask;
-    private readonly Func<int, ResamplerQuality, IResampler>? _resamplerFactory;
+    private readonly Func<int, ResamplerQuality, IResampler> _resamplerFactory;
+    private readonly double _minRatio, _maxRatio;
+    private readonly int _maxConverters;
+    private readonly int _redesignBudget;
+    private int _converterCount;
+    private long _droppedConverters;
     private readonly SpscQueue<Command> _commands;
     private readonly SpscQueue<MixerEvent> _events;
     private readonly SpscQueue<IResampler> _retired;
@@ -267,7 +361,12 @@ public sealed partial class AudioMixer
         _maxSrcChannels = options.MaxSourceChannels;
         _smoothFrames = (int)Math.Round(options.SmoothingMilliseconds * 0.001 * options.SampleRate);
         _outMask = options.OutputChannelMask;
-        _resamplerFactory = options.ResamplerFactory;
+        _minRatio = options.ConverterMinRatio;
+        _maxRatio = options.ConverterMaxRatio;
+        _maxConverters = options.MaxConvertedVoices < 0 ? options.MaxVoices : options.MaxConvertedVoices;
+        _redesignBudget = options.RatioRedesignsPerPass;
+        var converterOptions = new ResamplerOptions { MinRatio = _minRatio, MaxRatio = _maxRatio };
+        _resamplerFactory = options.ResamplerFactory ?? ((ch, q) => AudioResampler.Create(ch, q, 1.0, converterOptions));
         _commands = new SpscQueue<Command>(options.CommandCapacity);
         _events = new SpscQueue<MixerEvent>(options.EventCapacity);
         _retired = new SpscQueue<IResampler>(options.MaxVoices * 2 + 16);
@@ -286,12 +385,18 @@ public sealed partial class AudioMixer
         _placed = new bool[_buses.Length];
         _srcPlanar = new float[_maxSrcChannels * _maxBlock];
         _inter = new float[_maxSrcChannels * _maxBlock];
-        _inCapacity = _maxBlock * 8 + ResampleMargin;
+        _inCapacity = ResampleChunk + CarryCapacity;
         _inScratch = new float[_inCapacity * _maxSrcChannels];
         _curve = new float[_maxBlock];
         _detectorRelease = (float)Math.Exp(-1.0 / (DetectorReleaseSeconds * _sampleRate));
+        // Reserved converters are built now, which also builds the shared filter tables outside any render or play call.
+        foreach (var r in options.ResolveReservations())
+            for (int i = 0; i < r.Count; i++) PoolPush(CreateConverter(r.Channels, r.Quality));
     
     }
+
+    /// <summary>Play requests refused because every converter allowed by <see cref="MixerOptions.MaxConvertedVoices"/> was in use. Safe to read from any thread.</summary>
+    public long DroppedConverterRequests => Volatile.Read(ref _droppedConverters);
 
     /// <summary>Output sample rate in Hz.</summary>
     public int SampleRate => _sampleRate;
@@ -331,15 +436,19 @@ public sealed partial class AudioMixer
     /// <summary>Starts a voice.</summary>
     /// <param name="parameters">What to play and how.</param>
     /// <returns>A handle, or <c>default</c> (invalid) if the command queue was full.</returns>
-    /// <exception cref="ArgumentException">The source is missing or has too many channels, or needs a converter and no
-    /// <see cref="MixerOptions.ResamplerFactory"/> is configured.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Bus, fade, gain or pitch is out of range.</exception>
+    /// <exception cref="ArgumentException">The source is missing or has too many channels.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Bus, fade, gain or pitch is out of range, or the conversion ratio (from the
+    /// source's rate and the pitch) is outside <see cref="MixerOptions.ConverterMinRatio"/> to <see cref="MixerOptions.ConverterMaxRatio"/>.</exception>
     public VoiceHandle Play(in PlayParams parameters)
     {
         Command cmd = BuildPlay(in parameters, out int channels, out ResamplerQuality quality, out double ratio);
         lock (_controlLock)
         {
-            if (ratio > 0) cmd.Resampler = AcquireResampler(channels, quality, ratio);
+            if (ratio > 0)
+            {
+                cmd.Resampler = AcquireResampler(channels, quality, ratio);
+                if (cmd.Resampler == null) { Interlocked.Increment(ref _droppedConverters); return default; }
+            }
             cmd.Id = ++_nextId;
             if (!_commands.TryEnqueue(cmd))
             {
@@ -366,7 +475,11 @@ public sealed partial class AudioMixer
         lock (_controlLock)
         {
             if (_commands.FreeSlots < 2) { Interlocked.Increment(ref _droppedCommands); return default; }
-            if (ratio > 0) play.Resampler = AcquireResampler(channels, quality, ratio);
+            if (ratio > 0)
+            {
+                play.Resampler = AcquireResampler(channels, quality, ratio);
+                if (play.Resampler == null) { Interlocked.Increment(ref _droppedConverters); return default; }
+            }
             play.Id = ++_nextId;
             _commands.TryEnqueue(play);
             _commands.TryEnqueue(new Command { Kind = CommandKind.Stop, Id = from.Id, Frames = frames });
@@ -635,10 +748,9 @@ public sealed partial class AudioMixer
     {
         var src = p.Source ?? throw new ArgumentException("A source is required.", nameof(p));
         channels = src.Format.Channels;
-        quality = p.Resampling;
+        quality = ResamplerQuality.Linear;
         if (channels < 1 || channels > _maxSrcChannels) throw new ArgumentException($"Sources may have 1 to {_maxSrcChannels} channels.", nameof(p));
         if ((uint)p.Bus >= (uint)_ctlParent.Length) throw new ArgumentOutOfRangeException(nameof(p), "Bus out of range.");
-        if (!Enum.IsDefined(p.Resampling)) throw new ArgumentOutOfRangeException(nameof(p), "Unknown resampler quality.");
         ArgumentOutOfRangeException.ThrowIfNegative(p.FadeInFrames);
         CheckGain(p.Gain);
         CheckFinite(p.Pan, nameof(p));
@@ -647,20 +759,24 @@ public sealed partial class AudioMixer
         ratio = 0;
         if (needsConverter)
         {
-            if (_resamplerFactory == null)
-                throw new ArgumentException($"Source rate {src.Format.SampleRate} Hz or the pitch needs a converter, but the mixer runs at {_sampleRate} Hz with no ResamplerFactory configured.", nameof(p));
             ratio = _sampleRate / ((double)src.Format.SampleRate * p.Pitch);
+            if (!(ratio >= _minRatio && ratio <= _maxRatio))
+                throw new ArgumentOutOfRangeException(nameof(p), $"The conversion ratio {ratio:F4} (mixer rate / source rate / pitch) is outside the converter range {_minRatio} to {_maxRatio}; widen MixerOptions.ConverterMinRatio/ConverterMaxRatio or change the pitch.");
+            bool pitched = p.Pitch != 1f || p.VariablePitch;
+            quality = p.Resampling ?? (pitched ? ResamplerQuality.Linear : ResamplerQuality.PolyphaseFast);
+            if (!Enum.IsDefined(quality)) throw new ArgumentOutOfRangeException(nameof(p), "Unknown resampler quality.");
         }
         return new Command
         {
             Kind = CommandKind.Play, Source = src, Gain = p.Gain, Pan = Math.Clamp(p.Pan, -1f, 1f), Loop = p.Loop,
             LoopStart = p.LoopStartFrame, LoopEnd = p.LoopEndFrame, Bus = p.Bus, Priority = p.Priority,
-            StartAt = p.StartAtFrame, Frames = p.FadeInFrames, Pitch = p.Pitch,
+            StartAt = p.StartAtFrame, Frames = p.FadeInFrames, Pitch = p.Pitch, Flag = p.VariablePitch,
         };
     }
 
     // Converters are created on the control thread and recycled: the render thread hands retired ones back through a ring.
-    private IResampler AcquireResampler(int channels, ResamplerQuality quality, double ratio)
+    // Returns null when every converter the mixer may own is in use.
+    private IResampler? AcquireResampler(int channels, ResamplerQuality quality, double ratio)
     {
         while (_retired.TryDequeue(out var back)) PoolPush(back);
         int key = channels * 4 + (int)quality;
@@ -672,13 +788,35 @@ public sealed partial class AudioMixer
         }
         else
         {
-            rs = _resamplerFactory!(channels, quality)
-                ?? throw new InvalidOperationException("The resampler factory returned null.");
-            if (rs.Channels != channels)
-                throw new InvalidOperationException($"The resampler factory returned a {rs.Channels}-channel converter for {channels} channels.");
+            if (_converterCount >= _maxConverters && !EvictIdleConverter()) return null;
+            rs = CreateConverter(channels, quality);
         }
         try { rs.SetRatio(ratio); }
         catch (ArgumentOutOfRangeException) { PoolPush(rs); throw; }
+        return rs;
+    }
+
+    // At the cap, an idle converter of another kind is dropped to make room, so reserved converters never lock the cap against
+    // the kinds the game actually uses.
+    private bool EvictIdleConverter()
+    {
+        foreach (var stack in _pool.Values)
+        {
+            if (stack.Count == 0) continue;
+            stack.Pop();
+            _converterCount--;
+            return true;
+        }
+        return false;
+    }
+
+    private IResampler CreateConverter(int channels, ResamplerQuality quality)
+    {
+        var rs = _resamplerFactory(channels, quality)
+            ?? throw new InvalidOperationException("The resampler factory returned null.");
+        if (rs.Channels != channels)
+            throw new InvalidOperationException($"The resampler factory returned a {rs.Channels}-channel converter for {channels} channels.");
+        _converterCount++;
         return rs;
     }
 
@@ -691,6 +829,6 @@ public sealed partial class AudioMixer
     {
         int key = rs.Channels * 4 + (int)rs.Quality;
         if (!_pool.TryGetValue(key, out var stack)) _pool[key] = stack = new Stack<IResampler>();
-        if (stack.Count < 2 * _voiceCount) stack.Push(rs);
+        stack.Push(rs);
     }
 }

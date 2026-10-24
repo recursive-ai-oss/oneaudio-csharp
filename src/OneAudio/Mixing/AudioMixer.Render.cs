@@ -9,6 +9,8 @@ public sealed partial class AudioMixer
     private const int ResampleMargin = 16;
     // Input a converter left unconsumed is carried to the next pass in a small per-voice buffer.
     private const int CarryCapacity = 64;
+    // Most input offered to a converter in one call: the converters append 256 frames at a time.
+    private const int ResampleChunk = 256;
     // Detector release: a fixed ~5 ms peak decay so ducking does not chatter on waveform zero crossings.
     private const double DetectorReleaseSeconds = 0.005;
 
@@ -43,6 +45,10 @@ public sealed partial class AudioMixer
         public readonly float[] Carry;
         public int CarryFrames;
         public bool SourceEnded, Flushing;
+        public bool Engaged;          // the converter is in use (see ApplyPitches); false while the effective ratio is exactly 1
+        public double AppliedRatio;   // the ratio last given to the converter
+        public double DesignScale;    // our estimate of the converter's filter design point, for the redesign budget
+        public bool Heavy;            // polyphase: ratio moves can trigger a filter redesign
 
         public Voice(int outChannels, int maxSrcChannels)
         {
@@ -86,6 +92,7 @@ public sealed partial class AudioMixer
     private readonly float _detectorRelease;
     private long _seq;
     private int _passFrames;
+    private int _rotate;
 
     // ---------------------------------------------------------------- render side
 
@@ -113,6 +120,7 @@ public sealed partial class AudioMixer
             foreach (var b in _buses) b.Touched = false;
             _master.Touched = false;
 
+            ApplyPitches(n, blockStart);
             int active = 0;
             for (int i = 0; i < _voices.Length; i++)
             {
@@ -312,6 +320,14 @@ public sealed partial class AudioMixer
         slot.Resampler = c.Resampler;
         slot.RateRatio = _sampleRate / (double)src.Format.SampleRate;
         slot.Pitch = slot.PitchTarget = c.Pitch;
+        if (c.Resampler != null)
+        {
+            double ratio = Math.Clamp(slot.RateRatio / c.Pitch, _minRatio, _maxRatio);
+            slot.AppliedRatio = c.Resampler.Ratio;
+            slot.Engaged = c.Flag || ratio != 1.0;
+            slot.Heavy = c.Resampler.Quality != ResamplerQuality.Linear;
+            slot.DesignScale = Math.Max(Math.Min(1.0, _minRatio), Math.Min(1.0, slot.AppliedRatio));
+        }
         slot.PitchLeft = 0;
         slot.PitchStep = 0;
         slot.CarryFrames = 0;
@@ -364,9 +380,9 @@ public sealed partial class AudioMixer
         int n = frames - off;
         var src = v.Source!;
 
-        int got = v.Resampler == null
+        int got = v.Resampler == null || !v.Engaged
             ? ReadDirect(v, src, n, out bool underrun, out bool finished)
-            : ReadResampled(v, src, n, frames, out underrun, out finished);
+            : ReadResampled(v, src, n, out underrun, out finished);
 
         if (underrun)
         {
@@ -388,6 +404,57 @@ public sealed partial class AudioMixer
         if (v.StopAfterRamp && v.RampLeft == 0) EndVoice(v);
     }
 
+    // Runs at the start of every pass, before any voice is mixed. Advances pitch glides and gives each converter its ratio.
+    // Moving a polyphase converter's ratio can make it redesign its filter bank (~0.3 ms), so those moves share a per-pass
+    // budget; voices that miss out keep their ratio for this pass. The start index rotates so no voice is starved.
+    private void ApplyPitches(int frames, long blockStart)
+    {
+        int budget = _redesignBudget;
+        int count = _voices.Length;
+        int first = _rotate;
+        _rotate = first + 1 == count ? 0 : first + 1;
+        double sMin = Math.Min(1.0, _minRatio);
+        for (int k = 0; k < count; k++)
+        {
+            int i = first + k;
+            if (i >= count) i -= count;
+            var v = _voices[i];
+            var rs = v.Resampler;
+            if (!v.Active || rs == null || v.StartAt >= blockStart + frames) continue;
+
+            if (v.PitchLeft > 0)
+            {
+                int step = Math.Min(v.PitchLeft, frames);
+                v.Pitch += v.PitchStep * step;
+                v.PitchLeft -= step;
+                if (v.PitchLeft == 0) v.Pitch = v.PitchTarget;
+            }
+            double ratio = Math.Clamp(v.RateRatio / v.Pitch, _minRatio, _maxRatio);
+            if (ratio == v.AppliedRatio) continue;
+            if (!v.Engaged)
+            {
+                if (ratio == 1.0) { v.AppliedRatio = 1.0; continue; }
+                // First non-unity ratio of a voice that started without conversion: start the converter from a clean state.
+                rs.Reset();
+                v.Engaged = true;
+            }
+
+            // Mirrors the converter's rule for keeping its current filter: it stays while the ratio's cutoff is within 5% above
+            // the design point and never below it. This is only used to budget; a wrong guess costs nothing but accuracy of the budget.
+            double sNow = Math.Min(1.0, ratio), d = v.DesignScale;
+            bool cheap = !v.Heavy || (sNow >= d && (sNow <= d * 1.05 || d >= 1.0));
+            if (!cheap)
+            {
+                if (budget <= 0) continue;
+                if (budget != int.MaxValue) budget--;
+                v.DesignScale = sNow < d ? Math.Max(sMin, sNow * 0.98) : sNow;
+            }
+            // A custom converter may refuse a ratio; the voice then keeps its previous speed.
+            try { rs.SetRatio(ratio); v.AppliedRatio = ratio; }
+            catch (ArgumentOutOfRangeException) { v.AppliedRatio = rs.Ratio; }
+        }
+    }
+
     // Source at the mixer's rate, no converter: read straight into planar rows.
     private int ReadDirect(Voice v, AudioSource src, int n, out bool underrun, out bool finished)
     {
@@ -404,31 +471,21 @@ public sealed partial class AudioMixer
         return got;
     }
 
-    // Source needs conversion: feed the converter from the source, carrying unconsumed input between passes.
-    private int ReadResampled(Voice v, AudioSource src, int n, int passFrames, out bool underrun, out bool finished)
+    // Source needs conversion: feed the converter from the source in chunks no larger than the converter appends at once
+    // (so it consumes each chunk whole), after first taking whatever output it can already make from what it holds.
+    // A converter that leaves input unconsumed anyway has it carried to the next call in a small per-voice buffer.
+    private int ReadResampled(Voice v, AudioSource src, int n, out bool underrun, out bool finished)
     {
         var rs = v.Resampler!;
         int sc = v.SrcCh;
         underrun = false;
         finished = false;
 
-        if (v.PitchLeft > 0)
-        {
-            int k = Math.Min(v.PitchLeft, passFrames);
-            v.Pitch += v.PitchStep * k;
-            v.PitchLeft -= k;
-            if (v.PitchLeft == 0) v.Pitch = v.PitchTarget;
-        }
-        double ratio = v.RateRatio / v.Pitch;
-        if (ratio != rs.Ratio)
-        {
-            // A converter may refuse a ratio outside its range; the voice then keeps its previous speed.
-            try { rs.SetRatio(ratio); }
-            catch (ArgumentOutOfRangeException) { ratio = rs.Ratio; }
-        }
-
+        // (Not while flushing: Process has no end-of-input limit and would run on past the end of the source.)
         int produced = 0;
-        for (int guard = 0; produced < n && guard < 64; guard++)
+        if (!v.Flushing) rs.Process(ReadOnlySpan<float>.Empty, _inter.AsSpan(0, n * sc), out _, out produced);
+
+        for (int guard = 0; produced < n && guard < 256; guard++)
         {
             if (v.Flushing)
             {
@@ -439,8 +496,8 @@ public sealed partial class AudioMixer
             }
 
             int want = n - produced;
-            ratio = rs.Ratio;
-            int needIn = (int)Math.Min(_inCapacity, Math.Ceiling(want / ratio) + ResampleMargin);
+            double ratio = rs.Ratio;
+            int needIn = (int)Math.Min(ResampleChunk, Math.Ceiling(want / ratio) + ResampleMargin);
             int have = v.CarryFrames;
             if (have > 0) v.Carry.AsSpan(0, have * sc).CopyTo(_inScratch);
             bool starved = false;
