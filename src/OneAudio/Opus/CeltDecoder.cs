@@ -83,6 +83,9 @@ internal sealed partial class CeltDecoder
         Reset();
     }
 
+    /// <summary>Skips the intensity-stereo phase inversion (RFC 8251 section 10), which suits mono downmix.</summary>
+    public bool DisablePhaseInversion { get; set; }
+
     /// <summary>First coded band (0 for CELT-only, 17 for hybrid).</summary>
     public int Start { get => _start; set => _start = value; }
 

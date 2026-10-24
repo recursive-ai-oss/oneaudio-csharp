@@ -346,6 +346,8 @@ internal sealed partial class CeltDecoder
             {
                 if (b > 2 << Bitres && remainingBits > 2 << Bitres) inv = dec.BitLogP(2);
                 else inv = 0;
+                // RFC 8251 section 10: optionally skip the 180 degree phase shift of intensity stereo.
+                if (DisablePhaseInversion) inv = 0;
                 itheta = 0;
             }
             int qalloc = (int)dec.TellFrac() - tell;

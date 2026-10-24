@@ -517,7 +517,7 @@ internal sealed class SilkChannel
 
     private void GainsDequant(bool conditional)
     {
-        const int invScaleQ16 = 1907826; // 65536 * ((88 - 2) * 128 / 6) / 63
+        const int invScaleQ16 = 1907825; // 65536 * ((88 - 2) * 128 / 6) / 63
         const int offset = 2090;         // 2 * 128 / 6 + 16 * 128
         int prev = LastGainIndex;
         for (int k = 0; k < NbSubfr; k++)
