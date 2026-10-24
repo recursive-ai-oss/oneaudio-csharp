@@ -8,7 +8,7 @@ Package id `RecursiveAI.OneAudio`, namespace `OneAudio`. License: MIT OR Apache-
 
 - Format-detecting open (`AudioDecoder.Open`) with explicit registration of containers and codecs.
 - WAV / RF64 decode: PCM 8/16/24/32-bit, IEEE float 32/64, `WAVE_FORMAT_EXTENSIBLE`; streaming, sample-accurate seeking, bit-exact integer reads.
-- The mixer render contract (`AudioMixer`): voices, buses, gain, pan, loops, fades, crossfade, voice cap with priority, streaming sources with underrun accounting.
+- The mixer (`AudioMixer`): voices, a bus graph with sub-mixes, ducking and smoothing, multichannel mapping, per-voice pitch and rate conversion through `IResampler`, gain, pan, loops, fades, crossfade, voice cap with priority, streaming sources with a decode-ahead pump and underrun accounting.
 - Contracts (interfaces only) for packet-based containers, codecs and resamplers; the Ogg, Vorbis, Opus, FLAC, MP3 codecs and the resamplers are built against them.
 
 ## Quick look

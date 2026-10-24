@@ -46,7 +46,7 @@ public class MixerTests
     public void Pan_ConstantPower_AndBusGain()
     {
         var m = Mixer();
-        m.SetBusGain(1, 0.5f);
+        m.SetBusGain(1, 0.5f, 0);
         m.Play(new PlayParams(Ramp(4)) { Pan = 1f, Bus = 1 });
         var o = new float[8];
         m.Render(o);
@@ -119,7 +119,7 @@ public class MixerTests
         Assert.True(m.Stop(new VoiceHandle(999)));
         m.Render(new float[4]);
         Assert.Throws<ArgumentException>(() => m.Play(new PlayParams(new AudioClip(new AudioFormat(44100, 1), [0f]))));
-        Assert.Throws<ArgumentException>(() => m.Play(new PlayParams(new AudioClip(new AudioFormat(Rate, 3), [0f, 0f, 0f]))));
+        Assert.Throws<ArgumentException>(() => m.Play(new PlayParams(new AudioClip(new AudioFormat(Rate, 9), new float[9]))));
         Assert.Throws<ArgumentOutOfRangeException>(() => m.Play(new PlayParams(Ramp(1)) { Bus = 99 }));
     }
 

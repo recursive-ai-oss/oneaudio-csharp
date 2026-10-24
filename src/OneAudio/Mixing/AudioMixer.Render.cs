@@ -1,0 +1,612 @@
+using OneAudio.Kernels;
+using OneAudio.Mixing;
+
+namespace OneAudio;
+
+public sealed partial class AudioMixer
+{
+    // Input frames offered beyond the strict need, so a converter with a few frames of look-ahead never starves.
+    private const int ResampleMargin = 16;
+    // Input a converter left unconsumed is carried to the next pass in a small per-voice buffer.
+    private const int CarryCapacity = 64;
+    // Detector release: a fixed ~5 ms peak decay so ducking does not chatter on waveform zero crossings.
+    private const double DetectorReleaseSeconds = 0.005;
+
+    private sealed class Voice
+    {
+        public bool Active;
+        public long Id;
+        public long Seq;
+        public AudioSource? Source;
+        public int SrcCh;
+        public ChannelMask SrcMask;
+        public float Gain, GainTarget, GainStep;
+        public int RampLeft;
+        public bool StopAfterRamp;
+        public float Pan;
+        public bool Loop;
+        public long LoopStart, LoopEnd;
+        public int Bus, Priority;
+        public long StartAt;
+        public long Position;
+        public bool InUnderrun;
+
+        // Channel matrix [output * SrcCh + input], with a linear ramp from Mat to MatTarget over MatLeft frames.
+        public readonly float[] Mat, MatTarget, MatStep;
+        public int MatLeft;
+
+        // Resampling: null when the source is at the mixer's rate and the voice cannot be pitched.
+        public IResampler? Resampler;
+        public double RateRatio; // mixer rate / source rate
+        public float Pitch, PitchTarget, PitchStep;
+        public int PitchLeft;
+        public readonly float[] Carry;
+        public int CarryFrames;
+        public bool SourceEnded, Flushing;
+
+        public Voice(int outChannels, int maxSrcChannels)
+        {
+            Mat = new float[outChannels * maxSrcChannels];
+            MatTarget = new float[outChannels * maxSrcChannels];
+            MatStep = new float[outChannels * maxSrcChannels];
+            Carry = new float[CarryCapacity * maxSrcChannels];
+        }
+    }
+
+    private sealed class Bus
+    {
+        public float[] Buf = [];
+        public bool Touched;
+        public int Parent = -1;
+        public float Level = 1f;     // the gain the host asked for
+        public bool Muted;
+        public float Gain = 1f;      // current gain, moving toward GainTarget
+        public float GainTarget = 1f;
+        public float GainStep;
+        public int GainLeft;
+        public int DuckSource = -1;
+        public float DuckThreshold, DuckDepth = 1f, DuckAttack, DuckRelease;
+        public float DuckEnv, DuckGain = 1f;
+    }
+
+    private readonly Voice[] _voices;
+    private readonly int _voiceCount;
+    private readonly Bus[] _buses;
+    private readonly Bus _master;
+    private readonly int[] _order;
+    private readonly int[] _indegree;
+    private readonly bool[] _placed;
+    private int _orderCount;
+    private bool _graphDirty = true;
+    private readonly float[] _srcPlanar;   // decoded voice audio, planar, stride _maxBlock
+    private readonly float[] _inter;       // interleaved staging after the converter
+    private readonly float[] _inScratch;   // converter input
+    private readonly int _inCapacity;      // frames
+    private readonly float[] _curve;
+    private readonly float _detectorRelease;
+    private long _seq;
+    private int _passFrames;
+
+    // ---------------------------------------------------------------- render side
+
+    /// <summary>
+    /// Fills <paramref name="output"/> with the next block of the mix. The frame count is implied by the span:
+    /// <c>output.Length / Channels</c> whole frames; a trailing partial frame is zeroed. The span is overwritten, not
+    /// added to. Call only from the host's audio thread, never concurrently with itself. Allocates nothing, takes
+    /// no locks and does not block; it throws nothing for any control input.
+    /// </summary>
+    /// <param name="output">Interleaved output at <see cref="SampleRate"/> and <see cref="Channels"/>.</param>
+    public void Render(Span<float> output)
+    {
+        output.Clear();
+        int ch = _channels;
+        int total = output.Length / ch;
+        int done = 0;
+        while (done < total)
+        {
+            int n = Math.Min(total - done, _maxBlock);
+            var block = output.Slice(done * ch, n * ch);
+            long blockStart = _timeline;
+            DrainCommands();
+            if (_graphDirty) RebuildOrder();
+            _passFrames = n;
+            foreach (var b in _buses) b.Touched = false;
+            _master.Touched = false;
+
+            int active = 0;
+            for (int i = 0; i < _voices.Length; i++)
+            {
+                var v = _voices[i];
+                if (!v.Active) continue;
+                MixVoice(v, n, blockStart);
+                if (v.Active) active++;
+            }
+            for (int i = 0; i < _orderCount; i++) ProcessBus(_buses[_order[i]], n);
+            FinishMaster(block, n);
+
+            Volatile.Write(ref _activeVoices, active);
+            Volatile.Write(ref _timeline, blockStart + n);
+            done += n;
+        }
+    }
+
+    // Processing order: a bus comes after every bus routed into it and after the source of its ducking link.
+    // The control side has already rejected loops; a loop that slipped through would leave its buses unprocessed.
+    private void RebuildOrder()
+    {
+        int count = _buses.Length;
+        for (int b = 0; b < count; b++) { _indegree[b] = 0; _placed[b] = false; }
+        for (int b = 0; b < count; b++)
+        {
+            if (_buses[b].Parent >= 0) _indegree[_buses[b].Parent]++;
+            if (_buses[b].DuckSource >= 0) _indegree[b]++;
+        }
+        int placed = 0;
+        bool progress = true;
+        while (placed < count && progress)
+        {
+            progress = false;
+            for (int b = 0; b < count; b++)
+            {
+                if (_placed[b] || _indegree[b] != 0) continue;
+                _placed[b] = true;
+                _order[placed++] = b;
+                if (_buses[b].Parent >= 0) _indegree[_buses[b].Parent]--;
+                for (int t = 0; t < count; t++)
+                    if (_buses[t].DuckSource == b) _indegree[t]--;
+                progress = true;
+            }
+        }
+        _orderCount = placed;
+        _graphDirty = false;
+    }
+
+    private void DrainCommands()
+    {
+        while (_commands.TryDequeue(out var c))
+        {
+            switch (c.Kind)
+            {
+                case CommandKind.Play: StartVoice(in c); break;
+                case CommandKind.Stop: { var v = Find(c.Id); if (v != null) BeginStop(v, c.Frames); break; }
+                case CommandKind.StopAll:
+                    foreach (var v in _voices) if (v.Active) BeginStop(v, c.Frames);
+                    break;
+                case CommandKind.SetGain: { var v = Find(c.Id); if (v != null) Ramp(v, c.Gain, c.Frames); break; }
+                case CommandKind.SetPan: { var v = Find(c.Id); if (v != null) { v.Pan = c.Pan; Remap(v, c.Frames < 0 ? _smoothFrames : c.Frames); } break; }
+                case CommandKind.SetLoop: { var v = Find(c.Id); if (v != null) { v.Loop = c.Loop; v.LoopStart = c.LoopStart; v.LoopEnd = c.LoopEnd; } break; }
+                case CommandKind.SetPitch: { var v = Find(c.Id); if (v != null) SetVoicePitch(v, c.Pitch, c.Frames); break; }
+                case CommandKind.SetBusGain:
+                    _buses[c.Bus].Level = c.Gain;
+                    RetargetBus(_buses[c.Bus], c.Frames);
+                    break;
+                case CommandKind.SetBusMute:
+                    _buses[c.Bus].Muted = c.Flag;
+                    RetargetBus(_buses[c.Bus], c.Frames);
+                    break;
+                case CommandKind.SetMasterGain:
+                    _master.Level = c.Gain;
+                    RetargetBus(_master, c.Frames);
+                    break;
+                case CommandKind.SetBusRoute:
+                    _buses[c.Bus].Parent = c.Aux;
+                    _graphDirty = true;
+                    break;
+                case CommandKind.SetDuck:
+                {
+                    var b = _buses[c.Bus];
+                    b.DuckSource = c.Aux;
+                    if (c.Aux >= 0)
+                    {
+                        b.DuckThreshold = c.F0; b.DuckDepth = c.F1; b.DuckAttack = c.F2; b.DuckRelease = c.F3;
+                        b.DuckEnv = 0f;
+                    }
+                    _graphDirty = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    private Voice? Find(long id)
+    {
+        foreach (var v in _voices) if (v.Active && v.Id == id) return v;
+        return null;
+    }
+
+    private static void Ramp(Voice v, float target, int frames)
+    {
+        if (frames <= 0) { v.Gain = v.GainTarget = target; v.RampLeft = 0; v.GainStep = 0; return; }
+        v.GainTarget = target;
+        v.RampLeft = frames;
+        v.GainStep = (target - v.Gain) / frames;
+    }
+
+    private void RetargetBus(Bus b, int frames)
+    {
+        if (frames < 0) frames = _smoothFrames;
+        float target = b.Muted ? 0f : b.Level;
+        b.GainTarget = target;
+        if (frames <= 0) { b.Gain = target; b.GainLeft = 0; b.GainStep = 0; return; }
+        b.GainLeft = frames;
+        b.GainStep = (target - b.Gain) / frames;
+    }
+
+    private void BeginStop(Voice v, int fadeFrames)
+    {
+        if (fadeFrames <= 0) { EndVoice(v); return; }
+        Ramp(v, 0f, fadeFrames);
+        v.StopAfterRamp = true;
+    }
+
+    // Recomputes the channel matrix for the voice's pan; ramps from the current coefficients over 'frames' (snaps if 0).
+    private void Remap(Voice v, int frames)
+    {
+        int len = _channels * v.SrcCh;
+        ChannelMapper.Build(v.MatTarget, v.SrcCh, v.SrcMask, _channels, _outMask, v.Pan);
+        if (frames <= 0)
+        {
+            v.MatTarget.AsSpan(0, len).CopyTo(v.Mat);
+            Array.Clear(v.MatStep, 0, len);
+            v.MatLeft = 0;
+            return;
+        }
+        for (int i = 0; i < len; i++) v.MatStep[i] = (v.MatTarget[i] - v.Mat[i]) / frames;
+        v.MatLeft = frames;
+    }
+
+    private static void SetVoicePitch(Voice v, float pitch, int frames)
+    {
+        if (v.Resampler == null) return;
+        v.PitchTarget = pitch;
+        if (frames <= 0) { v.Pitch = pitch; v.PitchLeft = 0; v.PitchStep = 0; return; }
+        v.PitchLeft = frames;
+        v.PitchStep = (pitch - v.Pitch) / frames;
+    }
+
+    private void StartVoice(in Command c)
+    {
+        Voice? slot = null;
+        Voice? weakest = null;
+        foreach (var v in _voices)
+        {
+            if (!v.Active) { slot = v; break; }
+            if (weakest == null || v.Priority < weakest.Priority || (v.Priority == weakest.Priority && v.Seq < weakest.Seq)) weakest = v;
+        }
+        if (slot == null)
+        {
+            if (weakest!.Priority > c.Priority)
+            {
+                Interlocked.Increment(ref _droppedPlays);
+                Post(new MixerEvent(MixerEventKind.PlayDropped, c.Id, 0));
+                Retire(c.Resampler);
+                return;
+            }
+            Interlocked.Increment(ref _stolen);
+            Post(new MixerEvent(MixerEventKind.VoiceStolen, weakest.Id, 0));
+            Retire(weakest.Resampler);
+            weakest.Resampler = null;
+            weakest.Active = false;
+            weakest.Source = null;
+            slot = weakest;
+        }
+        var src = c.Source!;
+        slot.Active = true;
+        slot.Id = c.Id;
+        slot.Seq = ++_seq;
+        slot.Source = src;
+        slot.SrcCh = src.Format.Channels;
+        slot.SrcMask = src.Format.ChannelMask;
+        slot.Pan = c.Pan;
+        slot.Loop = c.Loop;
+        slot.LoopStart = c.LoopStart;
+        slot.LoopEnd = c.LoopEnd;
+        slot.Bus = c.Bus;
+        slot.Priority = c.Priority;
+        slot.StartAt = c.StartAt;
+        slot.Position = 0;
+        slot.InUnderrun = false;
+        slot.StopAfterRamp = false;
+        slot.RampLeft = 0;
+        slot.GainStep = 0;
+        slot.Resampler = c.Resampler;
+        slot.RateRatio = _sampleRate / (double)src.Format.SampleRate;
+        slot.Pitch = slot.PitchTarget = c.Pitch;
+        slot.PitchLeft = 0;
+        slot.PitchStep = 0;
+        slot.CarryFrames = 0;
+        slot.SourceEnded = false;
+        slot.Flushing = false;
+        Remap(slot, 0);
+        if (c.Frames > 0) { slot.Gain = 0f; Ramp(slot, c.Gain, c.Frames); }
+        else { slot.Gain = slot.GainTarget = c.Gain; }
+    }
+
+    private void EndVoice(Voice v)
+    {
+        v.Active = false;
+        v.Source = null;
+        Retire(v.Resampler);
+        v.Resampler = null;
+        Post(new MixerEvent(MixerEventKind.VoiceEnded, v.Id, 0));
+    }
+
+    // Hands a converter back to the control side for reuse; if the ring is full it is simply left to the collector.
+    private void Retire(IResampler? rs)
+    {
+        if (rs != null) _retired.TryEnqueue(rs);
+    }
+
+    private void Post(in MixerEvent e)
+    {
+        if (!_events.TryEnqueue(e)) Interlocked.Increment(ref _droppedEvents);
+    }
+
+    private Span<float> Row(float[] buf, int channel, int start, int count) => buf.AsSpan(channel * _maxBlock + start, count);
+
+    private void EnsureCleared(Bus b)
+    {
+        if (b.Touched) return;
+        b.Touched = true;
+        int n = _passFrames;
+        for (int c = 0; c < _channels; c++) Row(b.Buf, c, 0, n).Clear();
+    }
+
+    private void MixVoice(Voice v, int frames, long blockStart)
+    {
+        int off = 0;
+        if (v.StartAt > blockStart)
+        {
+            long wait = v.StartAt - blockStart;
+            if (wait >= frames) return;
+            off = (int)wait;
+        }
+        int n = frames - off;
+        var src = v.Source!;
+
+        int got = v.Resampler == null
+            ? ReadDirect(v, src, n, out bool underrun, out bool finished)
+            : ReadResampled(v, src, n, frames, out underrun, out finished);
+
+        if (underrun)
+        {
+            long missing = n - got;
+            Volatile.Write(ref _underrunFrames, _underrunFrames + missing);
+            if (!v.InUnderrun)
+            {
+                Volatile.Write(ref _underrunEvents, _underrunEvents + 1);
+                Post(new MixerEvent(MixerEventKind.Underrun, v.Id, missing));
+            }
+            v.InUnderrun = true;
+        }
+        else if (got == n) v.InUnderrun = false;
+
+        if (got > 0) MixToBus(v, got, off);
+        // Frames not produced (underrun) are silence and the ramps do not advance through them.
+
+        if (finished) { EndVoice(v); return; }
+        if (v.StopAfterRamp && v.RampLeft == 0) EndVoice(v);
+    }
+
+    // Source at the mixer's rate, no converter: read straight into planar rows.
+    private int ReadDirect(Voice v, AudioSource src, int n, out bool underrun, out bool finished)
+    {
+        int sc = v.SrcCh;
+        int got;
+        if (sc == 1)
+            got = src.ReadFrames(ref v.Position, v.Loop, v.LoopStart, v.LoopEnd, _srcPlanar.AsSpan(0, n), out underrun);
+        else
+        {
+            got = src.ReadFrames(ref v.Position, v.Loop, v.LoopStart, v.LoopEnd, _inter.AsSpan(0, n * sc), out underrun);
+            MixKernels.Deinterleave(_inter, sc, got, _srcPlanar, _maxBlock);
+        }
+        finished = got < n && !underrun;
+        return got;
+    }
+
+    // Source needs conversion: feed the converter from the source, carrying unconsumed input between passes.
+    private int ReadResampled(Voice v, AudioSource src, int n, int passFrames, out bool underrun, out bool finished)
+    {
+        var rs = v.Resampler!;
+        int sc = v.SrcCh;
+        underrun = false;
+        finished = false;
+
+        if (v.PitchLeft > 0)
+        {
+            int k = Math.Min(v.PitchLeft, passFrames);
+            v.Pitch += v.PitchStep * k;
+            v.PitchLeft -= k;
+            if (v.PitchLeft == 0) v.Pitch = v.PitchTarget;
+        }
+        double ratio = v.RateRatio / v.Pitch;
+        if (ratio != rs.Ratio)
+        {
+            // A converter may refuse a ratio outside its range; the voice then keeps its previous speed.
+            try { rs.SetRatio(ratio); }
+            catch (ArgumentOutOfRangeException) { ratio = rs.Ratio; }
+        }
+
+        int produced = 0;
+        for (int guard = 0; produced < n && guard < 64; guard++)
+        {
+            if (v.Flushing)
+            {
+                int w = rs.Flush(_inter.AsSpan(produced * sc, (n - produced) * sc));
+                if (w == 0) { finished = true; break; }
+                produced += w;
+                continue;
+            }
+
+            int want = n - produced;
+            ratio = rs.Ratio;
+            int needIn = (int)Math.Min(_inCapacity, Math.Ceiling(want / ratio) + ResampleMargin);
+            int have = v.CarryFrames;
+            if (have > 0) v.Carry.AsSpan(0, have * sc).CopyTo(_inScratch);
+            bool starved = false;
+            if (!v.SourceEnded && have < needIn)
+            {
+                int ask = needIn - have;
+                int read = src.ReadFrames(ref v.Position, v.Loop, v.LoopStart, v.LoopEnd, _inScratch.AsSpan(have * sc, ask * sc), out bool u);
+                if (read < ask)
+                {
+                    if (u) starved = true;
+                    else v.SourceEnded = true;
+                }
+                have += read;
+            }
+
+            rs.Process(_inScratch.AsSpan(0, have * sc), _inter.AsSpan(produced * sc, want * sc), out int used, out int wrote);
+            used = Math.Clamp(used, 0, have);
+            int left = have - used;
+            if (left > CarryCapacity) left = CarryCapacity; // a converter that leaves this much behind is misbehaving; drop the excess
+            _inScratch.AsSpan(used * sc, left * sc).CopyTo(v.Carry);
+            v.CarryFrames = left;
+            produced += wrote;
+
+            if (starved) { underrun = true; break; }
+            if (wrote == 0 && used == 0)
+            {
+                if (v.SourceEnded) v.Flushing = true;
+                else break;
+            }
+        }
+
+        MixKernels.Deinterleave(_inter, sc, produced, _srcPlanar, _maxBlock);
+        return produced;
+    }
+
+    // Applies the voice gain and channel matrix to the planar frames [0, got) and accumulates into its bus at 'off'.
+    private void MixToBus(Voice v, int got, int off)
+    {
+        int sc = v.SrcCh;
+        int oc = _channels;
+        float fold = 1f;
+
+        if (v.RampLeft > 0)
+        {
+            int k = Math.Min(v.RampLeft, got);
+            float step = v.GainStep;
+            for (int c = 0; c < sc; c++)
+            {
+                MixKernels.ScaleRamp(Row(_srcPlanar, c, 0, k), v.Gain + step, step);
+                if (k < got) MixKernels.Scale(Row(_srcPlanar, c, k, got - k), v.RampLeft <= got ? v.GainTarget : v.Gain + step * k);
+            }
+            if (v.RampLeft <= got) { v.Gain = v.GainTarget; v.RampLeft = 0; }
+            else { v.Gain += step * got; v.RampLeft -= got; }
+        }
+        else fold = v.Gain;
+
+        var bus = _buses[v.Bus];
+        EnsureCleared(bus);
+
+        int left = v.MatLeft;
+        int ramp = Math.Min(left, got);
+        bool whole = left <= got;
+        for (int i = 0; i < sc; i++)
+        {
+            for (int o = 0; o < oc; o++)
+            {
+                int idx = o * sc + i;
+                float c0 = v.Mat[idx];
+                float st = v.MatStep[idx];
+                float end = whole ? v.MatTarget[idx] : c0 + st * got;
+                if (c0 == 0f && st == 0f && end == 0f) continue;
+                var dst = Row(bus.Buf, o, off, got);
+                var s = Row(_srcPlanar, i, 0, got);
+                if (ramp > 0)
+                {
+                    if (st != 0f) MixKernels.AddScaledRamp(dst[..ramp], s[..ramp], (c0 + st) * fold, st * fold);
+                    else if (c0 != 0f) MixKernels.AddScaled(dst[..ramp], s[..ramp], c0 * fold);
+                }
+                if (ramp < got && end != 0f) MixKernels.AddScaled(dst[ramp..], s[ramp..], end * fold);
+                v.Mat[idx] = end;
+            }
+        }
+        if (left > 0) { v.MatLeft = whole ? 0 : left - got; if (whole) Array.Clear(v.MatStep, 0, oc * sc); }
+    }
+
+    // Applies a bus's gain in place, then adds it into its parent (or the master). Untouched buses only advance their ramps.
+    private void ProcessBus(Bus b, int n)
+    {
+        bool ducking = b.DuckSource >= 0 || b.DuckGain < 1f;
+        if (ducking) ComputeDuck(b, n);
+        if (!ApplyGain(b, n)) return;
+
+        int oc = _channels;
+        var parent = b.Parent >= 0 ? _buses[b.Parent] : _master;
+        EnsureCleared(parent);
+        for (int c = 0; c < oc; c++)
+        {
+            if (ducking) MixKernels.AddCurve(Row(parent.Buf, c, 0, n), Row(b.Buf, c, 0, n), _curve.AsSpan(0, n));
+            else MixKernels.AddScaled(Row(parent.Buf, c, 0, n), Row(b.Buf, c, 0, n), 1f);
+        }
+    }
+
+    // Scales the bus's buffer by its (possibly ramping) gain and advances the ramp. Returns whether anything audible remains.
+    private bool ApplyGain(Bus b, int n)
+    {
+        int oc = _channels;
+        int left = b.GainLeft;
+        float g0 = b.Gain;
+        float end = left > n ? g0 + b.GainStep * n : left > 0 ? b.GainTarget : g0;
+        bool audible = b.Touched && !(g0 == 0f && end == 0f);
+
+        if (audible)
+        {
+            if (left > 0)
+            {
+                int k = Math.Min(left, n);
+                for (int c = 0; c < oc; c++)
+                {
+                    MixKernels.ScaleRamp(Row(b.Buf, c, 0, k), g0 + b.GainStep, b.GainStep);
+                    if (k < n) MixKernels.Scale(Row(b.Buf, c, k, n - k), end);
+                }
+            }
+            else if (g0 != 1f)
+            {
+                for (int c = 0; c < oc; c++) MixKernels.Scale(Row(b.Buf, c, 0, n), g0);
+            }
+        }
+
+        if (left > 0)
+        {
+            b.Gain = end;
+            b.GainLeft = left > n ? left - n : 0;
+            if (left <= n) b.GainStep = 0f;
+        }
+        return audible;
+    }
+
+    // Follows the source bus's level (already gain-adjusted, since it is processed first) and writes the target's
+    // duck gain for each frame into _curve.
+    private void ComputeDuck(Bus t, int n)
+    {
+        Bus? s = t.DuckSource >= 0 ? _buses[t.DuckSource] : null;
+        bool live = s != null && s.Touched;
+        float env = t.DuckEnv, g = t.DuckGain;
+        float thr = t.DuckThreshold, depth = t.DuckDepth, atk = t.DuckAttack, rel = t.DuckRelease;
+        float detRel = _detectorRelease;
+        int oc = _channels;
+        var curve = _curve;
+        for (int f = 0; f < n; f++)
+        {
+            float peak = 0f;
+            if (live)
+                for (int c = 0; c < oc; c++) peak = Math.Max(peak, Math.Abs(s!.Buf[c * _maxBlock + f]));
+            env = peak > env ? peak : env * detRel;
+            float target = s != null && env > thr ? depth : 1f;
+            float coef = target < g ? atk : rel;
+            g = target + (g - target) * coef;
+            curve[f] = g;
+        }
+        t.DuckEnv = env;
+        if (s == null && g > 0.99999f) g = 1f; // fully released after the link was removed
+        t.DuckGain = g;
+    }
+
+    private void FinishMaster(Span<float> block, int n)
+    {
+        if (ApplyGain(_master, n)) MixKernels.Interleave(_master.Buf, _maxBlock, _channels, n, block);
+    }
+}
