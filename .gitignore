@@ -19,3 +19,4 @@ bin/
 obj/
 artifacts/
 BenchmarkDotNet.Artifacts/
+!/THIRD-PARTY-NOTICES.md
