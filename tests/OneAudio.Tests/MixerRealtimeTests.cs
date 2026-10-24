@@ -2,11 +2,6 @@ using Xunit;
 
 namespace OneAudio.Tests;
 
-// Runs alone: the GC-count assertions would otherwise see collections triggered by tests running in parallel.
-[CollectionDefinition("RealtimeAllocation", DisableParallelization = true)]
-public class RealtimeAllocationDefinition;
-
-[Collection("RealtimeAllocation")]
 public class MixerRealtimeTests
 {
     private const int Rate = 48000;

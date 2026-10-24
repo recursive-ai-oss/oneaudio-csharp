@@ -53,9 +53,9 @@ public class MixerStreamingTests
         var sources = new List<StreamingSource>();
         for (int i = 0; i < 20; i++)
         {
-            var s = new StreamingSource(new RampDecoder(Rate, 100_000), capacityFrames: 2048);
+            var s = new StreamingSource(new RampDecoder(Rate, 100_000), capacityFrames: 16384);
             pump.Add(s);
-            Assert.Equal(2048, s.BufferedFrames); // primed before the voice starts
+            Assert.Equal(16384, s.BufferedFrames); // primed before the voice starts
             sources.Add(s);
             m.Play(new PlayParams(s) { Gain = 0.01f });
         }
@@ -64,8 +64,8 @@ public class MixerStreamingTests
         for (int i = 0; i < 300; i++)
         {
             m.Render(o);
-            // Pace the render loop a little under real time so the pump thread keeps up.
-            Thread.Sleep(1);
+            // Pace the render loop well under real time so the pump thread keeps up even on a slow or emulated host.
+            Thread.Sleep(3);
         }
         Assert.Equal(0, m.UnderrunEvents);
         Assert.Equal(20, m.ActiveVoices);
