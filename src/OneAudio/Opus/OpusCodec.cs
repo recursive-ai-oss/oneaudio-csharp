@@ -86,19 +86,6 @@ internal sealed class OpusCodec : IAudioCodec
     }
 }
 
-/// <summary>Registration helper for Opus.</summary>
-public static class OpusRegistryExtensions
-{
-    /// <summary>Registers the Opus decoder, which reads Ogg Opus streams (RFC 7845).</summary>
-    /// <param name="registry">The registry.</param>
-    /// <returns><paramref name="registry"/>, for chaining.</returns>
-    public static AudioCodecRegistry AddOpus(this AudioCodecRegistry registry)
-    {
-        ArgumentNullException.ThrowIfNull(registry);
-        return registry.Add(OpusCodec.Instance);
-    }
-}
-
 /// <summary>
 /// Decodes an Ogg Opus stream (RFC 7845) from an <see cref="IPacketSource"/>. Output is 48 kHz interleaved float, in
 /// the standard WAV channel order for channel mapping family 1. The pre-skip is removed, the header's output gain
