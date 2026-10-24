@@ -62,6 +62,22 @@ foreach (var q in new[] { ResamplerQuality.Linear, ResamplerQuality.Polyphase, R
     if (ru != Frames || rw < Frames * 44_100 / Rate - 2 || rw > Frames * 44_100 / Rate + 2) return Fail($"resample {q}: used {ru}, wrote {rw}");
 }
 
+// Opus: every mode through the packet decoder (random payloads are valid Opus), plus codec registration.
+var opusRegistry = new AudioCodecRegistry().AddOgg().AddOpus();
+if (opusRegistry.GetCodec(CodecId.Opus).Id != CodecId.Opus) return Fail("opus registration");
+var opus = new OneAudio.Opus.OpusDecoder(48_000, 2);
+var opusPcm = new float[2 * 5760];
+var opusRng = new Random(3);
+for (int config = 0; config < 32; config += 5)
+{
+    var packet = new byte[80];
+    opusRng.NextBytes(packet);
+    packet[0] = (byte)(config << 3 | 4);
+    int got = opus.Decode(packet, opusPcm);
+    if (got != OneAudio.Opus.OpusPacket.GetSampleCount(packet, 48_000)) return Fail("opus length");
+    if (opus.DecodePacketLoss(opusPcm.AsSpan(0, 960 * 2)) != 960) return Fail("opus loss");
+}
+
 Console.WriteLine($"ok: {Frames} frames decoded, mixed peak L={peakL:F3} R={peakR:F3}, underruns={mixer.UnderrunEvents}");
 return 0;
 
