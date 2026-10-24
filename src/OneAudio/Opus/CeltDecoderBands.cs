@@ -139,11 +139,12 @@ internal sealed partial class CeltDecoder
 
     private static float CosNorm(float x) => (float)Math.Cos((.5f * Pi) * (double)x);
 
+    private static readonly int[] SpreadFactor = [15, 10, 5];
+
     private static void ExpRotation(Span<float> x, int len, int dir, int stride, int k, int spread)
     {
         if (2 * k >= len || spread == SpreadNone) return;
-        ReadOnlySpan<int> spreadFactor = [15, 10, 5];
-        int factor = spreadFactor[spread - 1];
+        int factor = SpreadFactor[spread - 1];
         float gain = (float)len / (len + factor * k);
         float theta = .5f * (gain * gain);
         float c = CosNorm(theta);

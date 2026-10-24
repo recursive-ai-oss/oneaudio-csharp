@@ -432,7 +432,7 @@ internal sealed partial class CeltDecoder
                         for (int i = 0; i < len + Overlap; i++) e[i] = ratio * e[i];
                     }
                 }
-                CombFilter(mem, outMem + MaxPeriod, mem, outMem + MaxPeriod, _postfilterPeriod, _postfilterPeriod, Overlap,
+                CombFilter(mem, outMem + MaxPeriod, mem, outMem + MaxPeriod, Math.Max(_postfilterPeriod, CombMinPeriod), Math.Max(_postfilterPeriod, CombMinPeriod), Overlap,
                     _postfilterGain, _postfilterGain, _postfilterTapset, _postfilterTapset, ReadOnlySpan<float>.Empty, 0);
                 for (int i = 0; i < MaxPeriod + Overlap - n; i++)
                     mem[outMem + i] = mem[outMem + n + i];
@@ -444,7 +444,7 @@ internal sealed partial class CeltDecoder
                     mem[outMem + MaxPeriod + Overlap - i - 1] = window[i] * tmp;
                 }
                 for (int i = 0; i < n; i++) mem[outMem + MaxPeriod - n + i] = e[i];
-                CombFilter(e, 0, mem, outMem + MaxPeriod, _postfilterPeriod, _postfilterPeriod, Overlap,
+                CombFilter(e, 0, mem, outMem + MaxPeriod, Math.Max(_postfilterPeriod, CombMinPeriod), Math.Max(_postfilterPeriod, CombMinPeriod), Overlap,
                     -_postfilterGain, -_postfilterGain, _postfilterTapset, _postfilterTapset, ReadOnlySpan<float>.Empty, 0);
                 for (int i = 0; i < Overlap; i++) mem[outMem + MaxPeriod + i] = e[i];
             }

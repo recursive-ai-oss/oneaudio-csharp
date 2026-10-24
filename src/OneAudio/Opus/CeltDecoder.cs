@@ -59,8 +59,8 @@ internal sealed partial class CeltDecoder
     private readonly float[] _ac = new float[LpcOrder + 1];
     private readonly float[] _mem = new float[LpcOrder];
     private readonly float[] _xcorr = new float[DecodeBufferSize >> 2];
-    private readonly float[] _x4 = new float[DecodeBufferSize >> 3];
-    private readonly float[] _y4 = new float[DecodeBufferSize >> 3];
+    private readonly float[] _x4 = new float[DecodeBufferSize >> 2];
+    private readonly float[] _y4 = new float[DecodeBufferSize >> 2];
     private readonly float[] _xx = new float[MaxPeriod];
 
     public CeltDecoder(int channels, int sampleRate)

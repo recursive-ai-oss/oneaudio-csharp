@@ -100,8 +100,13 @@ public sealed class OpusDecoder
     /// <returns>Samples per channel written.</returns>
     /// <exception cref="AudioFormatException">The packet is malformed.</exception>
     /// <exception cref="ArgumentException"><paramref name="pcm"/> is too small.</exception>
-    public int Decode(ReadOnlySpan<byte> packet, Span<float> pcm)
+    public int Decode(ReadOnlySpan<byte> packet, Span<float> pcm) => Decode(packet, false, pcm, out _);
+
+    // selfDelimited is the framing of every stream but the last in a multistream packet (RFC 6716 appendix B);
+    // consumed reports how many bytes the packet used.
+    internal int Decode(ReadOnlySpan<byte> packet, bool selfDelimited, Span<float> pcm, out int consumed)
     {
+        consumed = packet.Length;
         int cap = pcm.Length / _channels;
         if (packet.IsEmpty) return Conceal(pcm.Slice(0, cap * _channels), Math.Min(cap, _frameSize));
 
@@ -113,10 +118,11 @@ public sealed class OpusDecoder
 
         Span<int> offsets = stackalloc int[OpusPacket.MaxFrames];
         Span<int> sizes = stackalloc int[OpusPacket.MaxFrames];
-        int count = OpusPacket.Parse(packet, false, offsets, sizes, out _, out _);
+        int count = OpusPacket.Parse(packet, selfDelimited, offsets, sizes, out _, out int used);
         if (count < 0) throw new AudioFormatException("Invalid Opus packet.");
         if (count * frameSize > cap) throw new ArgumentException("Output buffer is too small for the packet.", nameof(pcm));
 
+        if (selfDelimited) consumed = used;
         _mode = mode;
         _bandwidth = bandwidth;
         _frameSize = frameSize;
@@ -139,7 +145,13 @@ public sealed class OpusDecoder
     public int DecodePacketLoss(Span<float> pcm)
     {
         int frames = Math.Min(pcm.Length / _channels, OpusPacket.MaxSamplesPer48k * _fs / 48000);
-        return Conceal(pcm, frames);
+        int f25 = _fs / 400;
+        if (frames < f25) throw new ArgumentException("Output buffer is too small (at least 2.5 ms).", nameof(pcm));
+        frames -= frames % f25;
+        int done = 0;
+        // One concealed frame never exceeds the previous packet's frame size, so fill the request in steps.
+        while (done < frames) done += DecodeFrame(ReadOnlySpan<byte>.Empty, pcm.Slice(done * _channels), frames - done);
+        return done;
     }
 
     private int Conceal(Span<float> pcm, int frames)
@@ -177,7 +189,7 @@ public sealed class OpusDecoder
         if (!hasData)
         {
             // A one-byte packet carries only a TOC: conceal no more than it announces.
-            if (len == 1) frameSize = Math.Min(frameSize, _frameSize);
+            if (len <= 1) frameSize = Math.Min(frameSize, _frameSize);
             audioSize = frameSize;
             if (_prevMode == 0)
             {
