@@ -62,6 +62,8 @@ foreach (var q in new[] { ResamplerQuality.Linear, ResamplerQuality.Polyphase, R
     if (ru != Frames || rw < Frames * 44_100 / Rate - 2 || rw > Frames * 44_100 / Rate + 2) return Fail($"resample {q}: used {ru}, wrote {rw}");
 }
 
+if (VorbisSmoke.Run() != 0) return 1;
+
 Console.WriteLine($"ok: {Frames} frames decoded, mixed peak L={peakL:F3} R={peakR:F3}, underruns={mixer.UnderrunEvents}");
 return 0;
 
