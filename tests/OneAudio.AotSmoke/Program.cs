@@ -51,6 +51,17 @@ for (int pass = 0; pass < 12; pass++)
 
 if (peakL < 0.2f || peakR > 1e-6f) return Fail($"mix peaks L={peakL} R={peakR}");
 if (!mixer.TryGetEvent(out var ev) || ev.Kind != MixerEventKind.VoiceEnded) return Fail("expected VoiceEnded");
+foreach (var q in new[] { ResamplerQuality.Linear, ResamplerQuality.Polyphase, ResamplerQuality.PolyphaseFast })
+{
+    var rs = AudioResampler.Create(Rate, 44_100, 1, q);
+    var rin = new float[Frames];
+    for (int i = 0; i < Frames; i++) rin[i] = MathF.Sin(2 * MathF.PI * 440 * i / Rate);
+    var rout = new float[rs.MaxOutputFrames(Frames) + 4096];
+    rs.Process(rin, rout, out int ru, out int rw);
+    rw += rs.Flush(rout.AsSpan(rw));
+    if (ru != Frames || rw < Frames * 44_100 / Rate - 2 || rw > Frames * 44_100 / Rate + 2) return Fail($"resample {q}: used {ru}, wrote {rw}");
+}
+
 Console.WriteLine($"ok: {Frames} frames decoded, mixed peak L={peakL:F3} R={peakR:F3}, underruns={mixer.UnderrunEvents}");
 return 0;
 

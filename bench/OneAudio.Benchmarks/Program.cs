@@ -3,7 +3,7 @@ using BenchmarkDotNet.Running;
 using OneAudio;
 using OneAudio.Benchmarks;
 
-BenchmarkSwitcher.FromAssembly(typeof(WavDecodeBenchmark).Assembly).Run(args);
+BenchmarkSwitcher.FromAssembly(typeof(ResampleBenchmarks).Assembly).Run(args);
 
 namespace OneAudio.Benchmarks
 {
