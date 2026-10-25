@@ -41,7 +41,8 @@ internal static class FlacEncodeReport
             {
                 string name = Path.GetFileNameWithoutExtension(file);
                 int num = int.Parse(name.AsSpan(0, 2), CultureInfo.InvariantCulture);
-                if (num is >= 45 and <= 59) continue; // metadata torture files, not audio variety
+                if (num is >= 45 and <= 59) continue;
+                if (Environment.GetEnvironmentVariable("ONEAUDIO_ONLY") is { } only && num != int.Parse(only)) continue; // metadata torture files, not audio variety
                 var (samples, fmt, bits) = DecodeFlac(file);
                 foreach (int level in levels)
                 {
@@ -175,7 +176,7 @@ internal static class FlacEncodeReport
 
     private static (byte[] Bytes, double Seconds) EncodeOurs(int[] samples, AudioFormat fmt, int bits, int level)
     {
-        var settings = new FlacEncoderSettings { CompressionLevel = level, BitsPerSample = bits };
+        var settings = new FlacEncoderSettings { CompressionLevel = level, BitsPerSample = bits, QlpPrecision = int.Parse(Environment.GetEnvironmentVariable("ONEAUDIO_QLP") ?? "0"), MaxLpcOrder = int.Parse(Environment.GetEnvironmentVariable("ONEAUDIO_LPC") ?? "-1") };
         var sw = Stopwatch.StartNew();
         using var ms = new MemoryStream();
         using (var enc = new FlacEncoder(ms, new AudioFormat(fmt.SampleRate, fmt.Channels), settings, true))

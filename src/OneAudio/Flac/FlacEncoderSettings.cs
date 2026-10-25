@@ -16,8 +16,8 @@ public sealed record FlacEncoderSettings
     /// Speed against size, 0 (fastest) to 8 (smallest). Levels 0 to 2 use fixed predictors only with 1152-frame blocks; 3 to 8 add
     /// linear prediction on 4096-frame blocks (maximum order 6, 8, 8, 8, 12, 12 for levels 3 to 8). Stereo input is decorrelated from
     /// level 1 (left/side, right/side or mid/side per frame, from an estimate at levels 1 and 4, by encoding every mode at the others).
-    /// Levels 6 and up analyse several windows, level 7 and 8 try the best two and three orders per window, and level 8 adds more
-    /// windows. Default 5.
+    /// Levels 6 to 8 analyse several windows and give the two best candidates the full search; 7 and 8 also try every fixed predictor
+    /// order, and 8 uses the most windows. Default 5.
     /// </summary>
     public int CompressionLevel { get; init; } = 5;
 

@@ -460,17 +460,17 @@ public sealed class FlacEncoder : IDisposable
         if (s.SeekPoints < 0 || s.SeekPoints > 1024) throw new ArgumentException("SeekPoints must be 0 to 1024.", nameof(s));
         if (s.TotalFrames > 0xF_FFFF_FFFFL) throw new ArgumentException("TotalFrames exceeds what STREAMINFO can hold.", nameof(s));
 
-        var (block, lpc, stereo, orders, part) = level switch
+        var (block, lpc, stereo, part) = level switch
         {
-            0 => (1152, 0, 0, 1, 3),
-            1 => (1152, 0, 1, 1, 3),
-            2 => (1152, 0, 2, 1, 3),
-            3 => (4096, 6, 0, 1, 4),
-            4 => (4096, 8, 1, 1, 4),
-            5 => (4096, 8, 2, 1, 5),
-            6 => (4096, 8, 2, 1, 6),
-            7 => (4096, 12, 2, 2, 6),
-            _ => (4096, 12, 2, 3, 6),
+            0 => (1152, 0, 0, 3),
+            1 => (1152, 0, 1, 3),
+            2 => (1152, 0, 2, 3),
+            3 => (4096, 6, 0, 4),
+            4 => (4096, 8, 1, 4),
+            5 => (4096, 8, 2, 5),
+            6 => (4096, 8, 2, 6),
+            7 => (4096, 12, 2, 6),
+            _ => (4096, 12, 2, 6),
         };
         var tukey = new WindowSpec(WindowSpec.Tukey, 0.5, 1, 0);
         WindowSpec[] windows = level switch
@@ -504,7 +504,6 @@ public sealed class FlacEncoder : IDisposable
             MaxPartitionOrder = part,
             StereoMode = stereo,
             ExhaustiveOrders = level >= 7,
-            OrdersPerWindow = orders,
             QlpPrecision = s.QlpPrecision,
             Windows = lpc > 0 ? windows : [],
         };

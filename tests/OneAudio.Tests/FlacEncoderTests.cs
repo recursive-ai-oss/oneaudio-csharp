@@ -76,6 +76,30 @@ internal static class EncoderSignals
         return list.ToArray();
     }
 
+    /// <summary>SHA-256 of the samples packed the way <c>flac -d</c> writes them: little-endian at the whole-byte width, left-aligned, 8-bit unsigned.</summary>
+    public static string PackedHash(int[] samples, int bits)
+    {
+        int bytes = (bits + 7) / 8, shift = bytes * 8 - bits;
+        var raw = new byte[samples.Length * bytes];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            int v = samples[i] << shift;
+            for (int b = 0; b < bytes; b++) raw[i * bytes + b] = (byte)(v >> (8 * b));
+            if (bytes == 1) raw[i] ^= 0x80;
+        }
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(raw));
+    }
+
+    /// <summary>The reference decoder's output hash for these bytes (see <see cref="PackedHash"/>), or null without the reference binary.</summary>
+    public static string? ReferenceDecodeHash(byte[] flac, string name)
+    {
+        if (FlacTestEnv.FlacBinary is null) return null;
+        string path = Path.Combine(Path.GetTempPath(), "oneaudio-enc-" + name + "-" + Guid.NewGuid().ToString("N")[..8] + ".flac");
+        File.WriteAllBytes(path, flac);
+        try { return FlacTestEnv.ReferenceHash(path); }
+        finally { File.Delete(path); }
+    }
+
     /// <summary>Runs <c>flac -t</c> on the bytes. Returns null when the reference binary is not available.</summary>
     public static string? FlacTest(byte[] flac, string name)
     {
@@ -149,6 +173,8 @@ public class FlacEncoderTests
             Assert.True(src.AsSpan().SequenceEqual(back), $"level {level}: decoded samples differ");
             string? err = EncoderSignals.FlacTest(flac, $"{kind}-{bits}-{channels}-{frames}-L{level}");
             if (err is not null) Assert.True(err.Length == 0, $"flac -t failed at level {level}: {err}");
+            if (frames > 0 && EncoderSignals.ReferenceDecodeHash(flac, "rt") is { } refHash)
+                Assert.Equal(EncoderSignals.PackedHash(src, bits), refHash); // flac -d returns exactly the source samples
         }
     }
 

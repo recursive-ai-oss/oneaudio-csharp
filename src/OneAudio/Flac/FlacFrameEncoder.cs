@@ -12,8 +12,6 @@ internal sealed class FlacEncoderPlan
     public int StereoMode;
     /// <summary>Run the full partition search on every fixed order instead of only the one with the smallest residual.</summary>
     public bool ExhaustiveOrders;
-    /// <summary>How many LPC orders to try per window, best first by the prediction error estimate.</summary>
-    public int OrdersPerWindow = 1;
     public int QlpPrecision; // 0 = by block size
     public WindowSpec[] Windows = [];
 }
@@ -441,10 +439,12 @@ internal sealed class FlacFrameEncoder
         int maxOrd = Math.Min(_plan.MaxLpcOrder, n - 1);
         if (maxOrd < 1) return;
         int prec = _plan.QlpPrecision != 0 ? _plan.QlpPrecision : n <= 192 ? 7 : n <= 384 ? 8 : n <= 576 ? 9 : n <= 1152 ? 10 : n <= 2304 ? 11 : n <= 4608 ? 12 : 13;
+        // Wide samples (high-resolution audio is often heavily oversampled) are very predictable and need exact coefficients.
+        if (_plan.QlpPrecision == 0 && bpsE > 16) prec = 15;
         EnsureWindows(n);
         int lags = maxOrd + 1;
         int padded = n + ((lags + 3) & ~3);
-        bool direct = _windows.Length == 1 && _plan.OrdersPerWindow == 1;
+        bool direct = _windows.Length == 1;
         _candCount = 0;
         for (int wi = 0; wi < _windows.Length; wi++)
         {
@@ -453,29 +453,22 @@ internal sealed class FlacFrameEncoder
             _xw.AsSpan(n, padded - n).Clear();
             FlacEncKernels.Autocorrelation(_xw.AsSpan(0, padded), n, _autoc.AsSpan(0, lags));
             if (!(_autoc[0] > 0)) continue;
-            _autoc[0] *= 1 + 1e-9; // keeps the recursion stable on nearly pure tones
+            _autoc[0] *= 1 + 1e-12; // keeps the recursion stable on nearly pure tones
             int valid = Levinson(maxOrd);
             if (valid < 1) continue;
 
-            // The orders with the smallest estimated size, best first. The estimate is the predicted residual entropy from the
-            // Levinson error plus the cost of the warm-up samples and coefficients.
-            uint used = 0;
-            int take = Math.Min(_plan.OrdersPerWindow, valid);
-            for (int t = 0; t < take; t++)
+            // The order with the smallest estimated size: the predicted residual entropy from the Levinson error plus the cost of
+            // the warm-up samples and coefficients.
+            int best = 1;
+            double bestEst = double.MaxValue;
+            for (int o = 1; o <= valid; o++)
             {
-                int best = 0;
-                double bestEst = double.MaxValue;
-                for (int o = 1; o <= valid; o++)
-                {
-                    if ((used >> (o - 1) & 1) != 0) continue;
-                    double bpr = Math.Max(0.0, 0.5 * Math.Log2(Math.Max(_errTab[o], 1e-9) / n) + 1.0);
-                    double est = bpr * (n - o) + o * (double)(bpsE + prec);
-                    if (est < bestEst) { bestEst = est; best = o; }
-                }
-                used |= 1u << (best - 1);
-                if (direct) TryLpc(sf, data, n, bpsE, best, prec, headerBits);
-                else ConsiderLpc(data, n, bpsE, best, prec, headerBits);
+                double bpr = Math.Max(0.0, 0.5 * Math.Log2(Math.Max(_errTab[o], 1e-9) / n) + 1.0);
+                double est = bpr * (n - o) + o * (double)(bpsE + prec);
+                if (est < bestEst) { bestEst = est; best = o; }
             }
+            if (direct) TryLpc(sf, data, n, bpsE, best, prec, headerBits);
+            else ConsiderLpc(data, n, bpsE, best, prec, headerBits);
         }
 
         // Second stage: only the two most promising candidates get the full partition search.
