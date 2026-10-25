@@ -1,3 +1,4 @@
+using OneAudio.Effects;
 using OneAudio.Kernels;
 using OneAudio.Mixing;
 
@@ -49,9 +50,12 @@ public sealed partial class AudioMixer
         public double AppliedRatio;   // the ratio last given to the converter
         public double DesignScale;    // our estimate of the converter's filter design point, for the redesign budget
         public bool Heavy;            // polyphase: ratio moves can trigger a filter redesign
+        public readonly FilterStage LowPass, HighPass;
 
-        public Voice(int outChannels, int maxSrcChannels)
+        public Voice(int outChannels, int maxSrcChannels, int sampleRate)
         {
+            LowPass = new FilterStage(false, maxSrcChannels, sampleRate);
+            HighPass = new FilterStage(true, maxSrcChannels, sampleRate);
             Mat = new float[outChannels * maxSrcChannels];
             MatTarget = new float[outChannels * maxSrcChannels];
             MatStep = new float[outChannels * maxSrcChannels];
@@ -73,6 +77,7 @@ public sealed partial class AudioMixer
         public int DuckSource = -1;
         public float DuckThreshold, DuckDepth = 1f, DuckAttack, DuckRelease;
         public float DuckEnv, DuckGain = 1f;
+        public EffectChain Fx = null!;
     }
 
     private readonly Voice[] _voices;
@@ -200,6 +205,46 @@ public sealed partial class AudioMixer
                     _buses[c.Bus].Parent = c.Aux;
                     _graphDirty = true;
                     break;
+                case CommandKind.SetBusFilter:
+                {
+                    var fx = (c.Bus < 0 ? _master : _buses[c.Bus]).Fx;
+                    var stage = fx.Filter((FilterType)c.Aux);
+                    int ramp = c.Frames < 0 ? _smoothFrames : c.Frames;
+                    if (c.Flag) stage.Set(c.F0, c.F1, ramp); else stage.Clear(ramp);
+                    break;
+                }
+                case CommandKind.SetVoiceFilter:
+                {
+                    var v = Find(c.Id);
+                    if (v != null)
+                    {
+                        var stage = (FilterType)c.Aux == FilterType.HighPass ? v.HighPass : v.LowPass;
+                        int ramp = c.Frames < 0 ? _smoothFrames : c.Frames;
+                        if (c.Flag) stage.Set(c.F0, c.F1, ramp); else stage.Clear(ramp);
+                    }
+                    break;
+                }
+                case CommandKind.SetBusReverb:
+                {
+                    var fx = (c.Bus < 0 ? _master : _buses[c.Bus]).Fx;
+                    var proc = _reverbs[c.Aux];
+                    if (!c.Flag) { if (fx.Reverb == proc) fx.Reverb = null; break; }
+                    if (fx.Reverb != proc)
+                    {
+                        // A slot handed to a bus starts clean and with these settings, never with another bus's tail.
+                        proc.Reset();
+                        proc.Configure(c.Reverb!, 0);
+                        fx.Reverb = proc;
+                    }
+                    else proc.Configure(c.Reverb!, c.Frames < 0 ? _smoothFrames : c.Frames);
+                    break;
+                }
+                case CommandKind.SetLimiter:
+                    if (c.Flag)
+                        _limiter!.Configure(true, (float)Math.Pow(10.0, c.Limiter!.CeilingDb / 20.0), c.Limiter.ReleaseMilliseconds * 0.001f, _sampleRate);
+                    else
+                        _limiter!.Configure(false, 1f, 0.1f, _sampleRate);
+                    break;
                 case CommandKind.SetDuck:
                 {
                     var b = _buses[c.Bus];
@@ -317,6 +362,8 @@ public sealed partial class AudioMixer
         slot.StopAfterRamp = false;
         slot.RampLeft = 0;
         slot.GainStep = 0;
+        slot.LowPass.Clear(0);
+        slot.HighPass.Clear(0);
         slot.Resampler = c.Resampler;
         slot.RateRatio = _sampleRate / (double)src.Format.SampleRate;
         slot.Pitch = slot.PitchTarget = c.Pitch;
@@ -397,7 +444,15 @@ public sealed partial class AudioMixer
         }
         else if (got == n) v.InUnderrun = false;
 
-        if (got > 0) MixToBus(v, got, off);
+        if (got > 0)
+        {
+            if (v.LowPass.Active || v.HighPass.Active)
+            {
+                v.HighPass.Process(_srcPlanar, _maxBlock, v.SrcCh, got);
+                v.LowPass.Process(_srcPlanar, _maxBlock, v.SrcCh, got);
+            }
+            MixToBus(v, got, off);
+        }
         // Frames not produced (underrun) are silence and the ramps do not advance through them.
 
         if (finished) { EndVoice(v); return; }
@@ -588,6 +643,7 @@ public sealed partial class AudioMixer
     {
         bool ducking = b.DuckSource >= 0 || b.DuckGain < 1f;
         if (ducking) ComputeDuck(b, n);
+        RunEffects(b, n);
         if (!ApplyGain(b, n)) return;
 
         int oc = _channels;
@@ -598,6 +654,33 @@ public sealed partial class AudioMixer
             if (ducking) MixKernels.AddCurve(Row(parent.Buf, c, 0, n), Row(b.Buf, c, 0, n), _curve.AsSpan(0, n));
             else MixKernels.AddScaled(Row(parent.Buf, c, 0, n), Row(b.Buf, c, 0, n), 1f);
         }
+    }
+
+    // True when the bus's gain is and stays zero over this pass, so nothing it holds is audible.
+    private static bool GainSilent(Bus b, int n)
+    {
+        int left = b.GainLeft;
+        float end = left > n ? b.Gain + b.GainStep * n : left > 0 ? b.GainTarget : b.Gain;
+        return b.Gain == 0f && end == 0f;
+    }
+
+    // Runs the bus's inserts in place. A bus without input still runs while an effect rings (a reverb tail); a bus that is
+    // silenced by its gain does not, and its effects are cleared so that they do not wake up later with an old tail.
+    private void RunEffects(Bus b, int n)
+    {
+        var fx = b.Fx;
+        if (!fx.Needed) return;
+        if (GainSilent(b, n))
+        {
+            if (fx.Ringing) fx.Reset();
+            return;
+        }
+        if (!b.Touched)
+        {
+            if (!fx.Ringing) return;
+            EnsureCleared(b);
+        }
+        fx.Process(b.Buf, _maxBlock, _channels, n);
     }
 
     // Scales the bus's buffer by its (possibly ramping) gain and advances the ramp. Returns whether anything audible remains.
@@ -664,6 +747,22 @@ public sealed partial class AudioMixer
 
     private void FinishMaster(Span<float> block, int n)
     {
-        if (ApplyGain(_master, n)) MixKernels.Interleave(_master.Buf, _maxBlock, _channels, n, block);
+        RunEffects(_master, n);
+        bool audible = ApplyGain(_master, n);
+        var limiter = _limiter;
+        if (limiter != null)
+        {
+            // The limiter's delay line still holds audio after the mix goes quiet, so it keeps running until it has drained.
+            if (!audible)
+            {
+                if (limiter.Idle) return;
+                _master.Touched = true;
+                for (int c = 0; c < _channels; c++) Row(_master.Buf, c, 0, n).Clear();
+            }
+            limiter.Process(_master.Buf, _maxBlock, _channels, n);
+            Volatile.Write(ref _limiterGainBits, BitConverter.SingleToInt32Bits(limiter.MinGain));
+            MixKernels.Interleave(_master.Buf, _maxBlock, _channels, n, block);
+        }
+        else if (audible) MixKernels.Interleave(_master.Buf, _maxBlock, _channels, n, block);
     }
 }

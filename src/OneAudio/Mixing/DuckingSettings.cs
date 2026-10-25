@@ -2,10 +2,26 @@ namespace OneAudio;
 
 /// <summary>
 /// How one bus ducks (is turned down by) the level of another. The detector watches the source bus after its own gain
-/// and mute, so muting or fading the source also stops the ducking.
+/// and mute (and its inserts), so muting or fading the source also stops the ducking.
+/// <para>
+/// <b>Gain curve.</b> The target's duck gain moves exponentially toward its goal (unity, or the depth set by
+/// <see cref="ReductionDb"/>) with the time constants below, so it approaches the goal asymptotically and never quite reaches it.
+/// After <see cref="ReleaseMs"/> * 4 milliseconds the gain has recovered all but 1.8% of the way (about 2% remains after 1 s with the default
+/// 250 ms release); after one attack time constant 37% of the way remains. A bus ducked "fully" (a very large <see cref="ReductionDb"/>) therefore
+/// decays toward silence but is only inaudible once the exponential has fallen far enough, and it takes about as long to come back.
+/// </para>
 /// </summary>
 public sealed record DuckingSettings
 {
+    /// <summary>
+    /// Settings that mean no ducking: pass them to <see cref="AudioMixer.SetDucking"/> to remove a link, which is the same as calling
+    /// <see cref="AudioMixer.ClearDucking"/>.
+    /// </summary>
+    public static DuckingSettings None { get; } = new() { Enabled = false };
+
+    /// <summary>False for <see cref="None"/>, true otherwise. When false the other values are ignored. Default true.</summary>
+    public bool Enabled { get; init; } = true;
+
     /// <summary>Detector level, in dBFS of the loudest channel's sample magnitude, above which the target is turned down. Default -30.</summary>
     public float ThresholdDb { get; init; } = -30f;
 

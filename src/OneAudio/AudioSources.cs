@@ -136,6 +136,8 @@ public sealed class StreamingSource : AudioSource, IDisposable
     private long _underrunEvents;
     private long _underrunFrames;
     private Exception? _fault;
+    private readonly long _lengthFrames;
+    private readonly long _startFrame;
 
     /// <summary>Creates a streaming source. The ring is allocated here, once.</summary>
     /// <param name="decoder">Decoder to read from. The source owns it and disposes it with <see cref="Dispose"/>.</param>
@@ -154,6 +156,8 @@ public sealed class StreamingSource : AudioSource, IDisposable
         _ch = decoder.Format.Channels;
         _ring = new float[capacityFrames * _ch];
         _chunk = new float[Math.Min(capacityFrames, 4096) * _ch];
+        _lengthFrames = decoder.LengthFrames;
+        _startFrame = decoder.PositionFrames;
     }
 
     private static AudioFormat Validate(IAudioDecoder decoder, int capacityFrames, bool loop, long loopStart, long loopEnd)
@@ -169,6 +173,39 @@ public sealed class StreamingSource : AudioSource, IDisposable
 
     /// <summary>Ring size in frames.</summary>
     public int CapacityFrames => _ring.Length / _ch;
+
+    /// <summary>
+    /// Length of the decoded stream in frames, as reported by the decoder when the source was created; -1 when the decoder cannot say
+    /// (some streamed or unindexed formats). A looping source still reports the decoder's whole length, not the loop's.
+    /// </summary>
+    public long LengthFrames => _lengthFrames;
+
+    /// <summary>
+    /// Frames the mixer has taken from this source so far, counted from the first frame it delivered and never reset, so a looping
+    /// source counts past <see cref="LengthFrames"/>. This counts frames handed to the voice, in source frames, before any rate conversion
+    /// and ahead of what the speakers play by the mixer's and device's buffering. Safe to read from any thread, without locks.
+    /// </summary>
+    public long PlayedFrames => Volatile.Read(ref _head) / _ch;
+
+    /// <summary>
+    /// Playback position in the decoded stream, in frames: where in the stream the next frame the mixer takes comes from. For a
+    /// looping source it wraps with the loop. -1 never occurs; when a looping source has no known loop length (an unknown
+    /// <see cref="LengthFrames"/> with no loop end) it equals <see cref="PlayedFrames"/> plus the starting position.
+    /// Same units and caveats as <see cref="PlayedFrames"/>. Safe to read from any thread, without locks.
+    /// </summary>
+    public long PositionFrames
+    {
+        get
+        {
+            long played = PlayedFrames;
+            long pos = _startFrame + played;
+            if (!_loop) return pos;
+            long end = _loopEnd >= 0 ? _loopEnd : _lengthFrames;
+            if (end < 0 || end <= _loopStart) return pos;
+            if (pos < end) return pos;
+            return _loopStart + (pos - end) % (end - _loopStart);
+        }
+    }
 
     /// <summary>Frames decoded and waiting to be rendered.</summary>
     public int BufferedFrames => (int)((Volatile.Read(ref _tail) - Volatile.Read(ref _head)) / _ch);
