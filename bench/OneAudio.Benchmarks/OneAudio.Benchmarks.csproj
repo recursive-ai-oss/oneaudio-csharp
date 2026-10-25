@@ -10,6 +10,7 @@
     <!-- Comparison row only; never referenced from src/. -->
     <PackageReference Include="NAudio.Core" Version="2.2.1" />
     <PackageReference Include="Concentus" Version="2.2.2" />
+    <PackageReference Include="R128Net" Version="1.1.2" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/OneAudio/OneAudio.csproj" />
