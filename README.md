@@ -6,13 +6,13 @@ Package id `RecursiveAI.OneAudio`, namespace `OneAudio`. License: MIT OR Apache-
 
 ## What works today
 
-- Format-detecting open (`AudioDecoder.Open`) with explicit registration of containers and codecs.
-- WAV / RF64 decode: PCM 8/16/24/32-bit, IEEE float 32/64, `WAVE_FORMAT_EXTENSIBLE`; streaming, sample-accurate seeking, bit-exact integer reads.
-- FLAC decode (`AddFlac()`): native `.flac` and FLAC in Ogg, including chained Ogg; bit-exact integer reads, CRC-checked frames, sample-accurate seeking (SEEKTABLE or frame-sync search), optional STREAMINFO MD5 verification (`FlacDecoder.VerifyMd5`).
-- WAV and FLAC encode (`WavEncoder`, `FlacEncoder`): streaming writers for PCM 8/16/24/32 and float WAV (extensible, RF64), and FLAC levels 0 to 8 (4 to 32 bits, 1 to 8 channels, streamable subset, MD5, seek table, Vorbis comments); float input is rounded with optional TPDF dither; allocation-free after the first write, deterministic output.
-- The mixer (`AudioMixer`): voices, a bus graph with sub-mixes, ducking and smoothing, multichannel mapping, per-voice pitch and rate conversion through `IResampler`, gain, pan, loops, fades, crossfade, voice cap with priority, streaming sources with a decode-ahead pump and underrun accounting.
-- Loudness (`LoudnessMeter`): BS.1770-5 / EBU R 128 momentary, short-term, integrated, loudness range and true peak, any sample rate, allocation-free; normalisation gain helper. Passes the EBU Tech 3341 / 3342 minimum-requirement signals.
-- Contracts (interfaces only) for packet-based containers, codecs and resamplers; the Ogg, Vorbis, Opus, FLAC, MP3 codecs and the resamplers are built against them.
+- Format-detecting open (`AudioDecoder.Open`) with explicit registration of containers and codecs (`AddWav`, `AddOgg`, `AddVorbis`, `AddOpus`, `AddFlac`, `AddMp3`), so unused codecs trim away.
+- **Decode:** WAV / RF64 (PCM 8/16/24/32-bit, IEEE float 32/64, `WAVE_FORMAT_EXTENSIBLE`), Ogg (chained streams, seeking), Vorbis, Opus, FLAC (native and in Ogg, bit-exact integer reads, STREAMINFO MD5 check) and MP3 (MPEG-1/2/2.5 Layer III, ID3v2, Xing/LAME gapless). Streaming into caller-provided spans, sample-accurate seeking everywhere.
+- **Encode:** WAV / RF64 (`WavEncoder`), FLAC levels 0 to 8 (`FlacEncoder`) and Opus (`OpusEncoder`, `OpusMultistreamEncoder`, Ogg Opus writer `OpusFileWriter`). Encoders produce identical bytes for identical input on a platform.
+- **Resampling:** `Polyphase` (Kaiser-windowed sinc), `PolyphaseFast` and `Linear`, independent of how the input is split into blocks.
+- **The mixer** (`AudioMixer`): voices, a bus graph with sub-mixes, ducking, multichannel mapping, per-voice pitch, gain, pan, loops, fades, crossfade, voice cap with priority, streaming sources with a decode-ahead pump and underrun accounting, and low-pass / high-pass filters, a reverb and a lookahead limiter. The render callback allocates nothing and takes no locks.
+- **Loudness** (`LoudnessMeter`): BS.1770-5 / EBU R 128 momentary, short-term, integrated, loudness range and true peak, any sample rate, allocation-free; a normalisation gain helper.
+- Not included: device output, spatial audio, MIDI, AAC, MP3 Layers I and II, MP3 and Vorbis encoding.
 
 ## Quick look
 
