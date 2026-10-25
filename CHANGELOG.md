@@ -10,6 +10,13 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 - `AudioMixer.TryEnableBusMeter(bus)`: enables a bus meter without throwing when no meter is free (or the mixer has none); `FreeBusMeters`
   tells "no slot" from "queue full" after a false. `AudioMixer.IsBusMetered(bus)` reports whether a bus currently holds a meter.
 
+### Fixed
+
+- Ogg Vorbis: a short stream that fits on a single page, such as a brief click followed by digital silence, decoded to silence or lost its
+  first or last samples. The one granule position on that page marks where the stream ends, but the decoder also read it as the position of the
+  stream's first sample and cut the difference from the start. It is now taken as the end trim only. Streams whose first audio page is not the
+  last page are unchanged.
+
 ## [0.1.0-alpha.3] - 2026-10-24
 
 ### Added

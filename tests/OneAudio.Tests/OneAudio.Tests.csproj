@@ -18,6 +18,7 @@
     <Content Include="../../testdata/flac/*" Link="testdata/flac/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../testdata/fuzz/**" Link="testdata/fuzz/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../testdata/opus/*.opus" Link="testdata/opus/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../testdata/transients/*" Link="testdata/transients/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../testdata/mp3/*.mp3" Link="testdata/mp3/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
