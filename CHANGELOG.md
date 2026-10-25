@@ -5,6 +5,16 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-25
+
+The first stable release. From here on the public API follows Semantic Versioning.
+
+- Decode WAV / RF64, Ogg (chained), Vorbis, Opus, FLAC (native and Ogg) and MP3 (MPEG-1/2/2.5 Layer III), streaming with exact seeking.
+- Encode WAV / RF64, FLAC (levels 0 to 8) and Opus (including Ogg Opus files).
+- Polyphase and linear resampling; the real-time mixer with buses, effects (filters, reverb, limiter) and per-bus loudness meters;
+  EBU R 128 / BS.1770 loudness with true peak and normalisation.
+- No changes to the API since 0.1.0-alpha.5. Symbol packages (`.snupkg`) are published alongside the package.
+
 ## [0.1.0-alpha.5] - 2026-10-25
 
 ### Fixed

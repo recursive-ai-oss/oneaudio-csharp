@@ -2,7 +2,7 @@
 
 Audio decode, encode, resample, mix and analyse for .NET 10, written from the specifications with **no dependencies beyond the base class library**. Built first for game audio: the mixer's render callback allocates nothing and takes no locks. NativeAOT- and trim-clean.
 
-Package id `RecursiveAI.OneAudio`, namespace `OneAudio`. License: MIT OR Apache-2.0 (see `LICENSE-MIT`, `LICENSE-APACHE`). Not published anywhere yet.
+Package id `RecursiveAI.OneAudio`, namespace `OneAudio`. License: MIT OR Apache-2.0 (see `LICENSE-MIT`, `LICENSE-APACHE`). Install with `dotnet add package RecursiveAI.OneAudio`.
 
 ## What works today
 

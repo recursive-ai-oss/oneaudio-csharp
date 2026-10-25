@@ -12,6 +12,8 @@
     <PackageProjectUrl>https://github.com/recursive-ai-oss/oneaudio-csharp</PackageProjectUrl>
     <RepositoryUrl>https://github.com/recursive-ai-oss/oneaudio-csharp</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <PackageTags>audio;wav;flac;vorbis;opus;mp3;ogg;resampler;mixer;loudness;ebu-r128;nativeaot</PackageTags>
   </PropertyGroup>
   <ItemGroup>
