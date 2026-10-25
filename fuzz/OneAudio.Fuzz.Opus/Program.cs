@@ -54,6 +54,17 @@ static void FuzzFile(byte[] data)
             decoder.Seek(f);
             decoder.Read(pcm);
         }
+        // Other runs of a chained file: a different channel layout changes the frame size, so the buffer is resized.
+        var o = (OpusStreamDecoder)decoder;
+        for (int link = 1; link < Math.Min(o.LinkCount, 4); link++)
+        {
+            if (o.GetLinkFormat(link) is null) continue;
+            o.SelectRun(link);
+            pcm = new float[4096 * decoder.Format.Channels];
+            decoder.Read(pcm);
+            decoder.Seek(decoder.LengthFrames / 2);
+            decoder.Read(pcm);
+        }
     }
 }
 
