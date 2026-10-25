@@ -2,7 +2,7 @@
 # Downloads third-party test material into a cache directory outside the repository and verifies SHA-256.
 # Nothing fetched here is ever committed. Usage: tools/fetch-corpus.sh [cache-dir] [entry-name ...]
 # The cache directory defaults to $ONEAUDIO_CORPUS, then ../.oneaudio-corpus next to the checkout.
-# Each entry is: name|url|sha256|archive-type (tgz, zip or raw). Add new corpora as new lines.
+# Each entry is: name|url|sha256|archive-type (tgz, tgz1, zip or raw). Add new corpora as new lines.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,6 +11,8 @@ shift || true
 wanted=("$@")
 
 ENTRIES=(
+  # IETF CELLAR FLAC decoder test files (CC0), pinned by commit; tgz1 strips the archive's top directory.
+  "flac-cellar|https://github.com/ietf-wg-cellar/flac-test-files/archive/aa7b0c6cf32994c106ae517a08134c28a96ff5b2.tar.gz|36de2310155b4084011fbd56f24603dfef91a26c5433e3f92bd21995b45089c3|tgz1"
   "opus-rfc8251|https://opus-codec.org/static/testvectors/opus_testvectors-rfc8251.tar.gz|6b26a22f9ba87b2b836906a9bb7afec5f8e54d49553b1200382520ee6fedfa55|tgz"
   # Xiph Vorbis test vectors, one directory per file under the cache.
   "vorbis-xiph-1.0.1-test|https://people.xiph.org/~xiphmont/test-vectors/vorbis/1.0.1-test.ogg|8c9423e00826d6d2457d78c09d6e2a94bcdf9216af796bb22a4c4f450c2e72bb|raw"
@@ -82,6 +84,7 @@ for entry in "${ENTRIES[@]}"; do
   rm -rf "$dest"; mkdir -p "$dest"
   case "$kind" in
     tgz) tar -xzf "$file" -C "$dest" ;;
+    tgz1) tar -xzf "$file" -C "$dest" --strip-components=1 ;;
     zip) unzip -q "$file" -d "$dest" ;;
     raw) cp "$file" "$dest/" ;;
     *) echo "unknown archive type $kind" >&2; exit 1 ;;

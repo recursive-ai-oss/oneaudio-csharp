@@ -72,6 +72,16 @@ seed() {
                      head -c 65536 "$f" > "$corpus/$(basename "$f").seed"
                    done
                  fi ;;
+    flac)        # The first byte picks the stream type (bit 1: no seeking); native and Ogg-wrapped inputs are sniffed.
+                 find "$here/testdata" -type f \( -iname '*.flac' -o -iname '*.oga' \) -size -1024k | while read -r f; do
+                   { printf '\000'; cat "$f"; } > "$corpus/$(basename "${f%.*}").seed"
+                   { printf '\002'; head -c 40000 "$f"; } > "$corpus/$(basename "${f%.*}")-fwd.seed"
+                 done
+                 if [ -n "${ONEAUDIO_CORPUS:-}" ] && [ -d "$ONEAUDIO_CORPUS/flac-cellar" ]; then
+                   find "$ONEAUDIO_CORPUS/flac-cellar" -type f -iname '*.flac' | while read -r f; do
+                     { printf '\000'; head -c 65536 "$f"; } > "$corpus/cellar-$(basename "$f" .flac | tr -c 'A-Za-z0-9' _).seed"
+                   done
+                 fi ;;
     opus)        # The first byte picks the mode; odd means "the rest is an Ogg Opus file".
                  find "$here/testdata" -type f -iname '*.opus' -size -1024k | while read -r f; do
                    { printf '\001'; head -c 65536 "$f"; } > "$corpus/$(basename "$f" .opus).seed"

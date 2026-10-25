@@ -28,6 +28,10 @@ Everything is in namespace `OneAudio`. Units: a **frame** is one sample per chan
 - **Seeking:** exact and bit-identical to a sequential decode. The first seek away from the start of a seekable stream makes one pass over the frame headers (untagged files do it at open, to learn their length); decoding then resumes up to 48 frames before the target to rebuild the bit reservoir and filterbank memory. Xing and VBRI seek tables are not used.
 - **Damaged data:** frames that cannot be decoded (missing reservoir after a cut, bad Huffman data) come out as silence and decoding goes on; lost sync is searched for with a two-header check.
 
+## FLAC
+
+`new AudioCodecRegistry().AddOgg().AddFlac()` opens `.flac` files and Ogg FLAC. `ReadInteger` returns the stream's exact samples left-shifted to the whole-byte container width in `Format.BitsPerSample` (a 12-bit stream reads as 16-bit values); `Read` scales by the stream's own depth, so full scale is +-1. The concrete `FlacDecoder` adds `BitsPerSample` (true depth), `Vendor`/`Comments`, `Md5` and `VerifyMd5()` (decodes the whole file and compares with the STREAMINFO signature; the position is restored). Frames are CRC-checked; a frame that changes the format mid-stream, or contradicts STREAMINFO (block size, frame size, sample count), is rejected with `AudioFormatException` after the earlier frames have been delivered. Chained Ogg FLAC follows the same run semantics as Vorbis and Opus (`LinkCount`, `GetLinkFormat`, `SelectRun`).
+
 ## Containers, codecs, registration
 
 - `IContainerFormat` recognises a format (`Matches`) and opens it. Containers that carry compressed packets expose them as an `IPacketSource` (`TryReadPacket`, `SeekToFrame`, `LengthFrames`) and look up the codec by `CodecId` in the registry. Raw-PCM containers (WAV) decode directly.
