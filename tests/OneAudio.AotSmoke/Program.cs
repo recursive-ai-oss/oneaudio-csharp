@@ -105,6 +105,7 @@ foreach (var q in new[] { ResamplerQuality.Linear, ResamplerQuality.Polyphase, R
 }
 
 if (VorbisSmoke.Run() != 0) return 1;
+if (EffectsSmoke.Run() != 0) return 1;
 if (Mp3Smoke.Run() != 0) return 1;
 if (FlacSmoke.Run() != 0) return 1;
 

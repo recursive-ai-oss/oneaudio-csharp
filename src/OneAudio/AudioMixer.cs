@@ -1,6 +1,21 @@
+using OneAudio.Effects;
+
 namespace OneAudio;
 
-/// <summary>Fixed configuration of an <see cref="AudioMixer"/>. Everything is preallocated from these numbers at creation.</summary>
+/// <summary>
+/// Fixed configuration of an <see cref="AudioMixer"/>. Everything is preallocated from these numbers at creation.
+/// <para>
+/// <b>Advice for hosts that render in real time.</b> The render path never allocates, but the rest of the process can pause it
+/// by triggering a garbage collection or by competing for the CPU. Create everything that costs memory up front, at startup or
+/// on a loading screen: the mixer itself (all buses, effects, the limiter and the reserved converters, see
+/// <see cref="PreallocatedConverters"/>), clips, and streaming sources. A converter that is not reserved is built inside
+/// <see cref="AudioMixer.Play"/> and a polyphase one is about a third of a megabyte, so avoid first uses of a new converter kind on busy
+/// frames. Avoid large allocations (anything over about 85 KB lands on the large object heap and can start a full collection)
+/// on busy frames, and consider setting <c>GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency</c> (or using
+/// <c>GC.TryStartNoGCRegion</c> around critical sections) so that blocking full collections are avoided while the game runs.
+/// Run <see cref="AudioMixer.Render"/> on a dedicated audio thread, never on the game's frame thread.
+/// </para>
+/// </summary>
 public sealed record MixerOptions
 {
     /// <summary>Output sample rate in Hz, chosen by the host to match its device. Fixed for the mixer's lifetime. Default 48000.</summary>
@@ -127,6 +142,21 @@ public sealed record MixerOptions
     /// </summary>
     public int RatioRedesignsPerPass { get; init; } = 2;
 
+    /// <summary>
+    /// Reverbs that may be active at once across all buses and the master output (<see cref="AudioMixer.SetBusReverb"/>). Each is built
+    /// when the mixer is created and takes about 0.3 MB for stereo at 48 kHz (eight delay lines of 0.13 MB in all, plus a pre-delay line per channel of 0.2 s rounded up to a
+    /// power of two). 0 builds none. Range 0 to 16. Default 2.
+    /// </summary>
+    public int MaxReverbs { get; init; } = 2;
+
+    /// <summary>
+    /// Lookahead of the master limiter (<see cref="AudioMixer.SetLimiter"/>), in milliseconds, 0 to 100. A limiter needs to see a peak
+    /// before it plays, so the whole output is delayed by this much (<see cref="AudioMixer.LatencyFrames"/>), whether or not the limiter is
+    /// switched on; the latency is therefore fixed for the mixer's lifetime. 0 builds no limiter and adds no latency. A few milliseconds (5)
+    /// is typical: shorter lookahead makes a harder, more audible attack. Default 0.
+    /// </summary>
+    public double LimiterLookaheadMilliseconds { get; init; }
+
     internal void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(SampleRate, 1);
@@ -148,6 +178,10 @@ public sealed record MixerOptions
             throw new ArgumentOutOfRangeException(nameof(ConverterMinRatio), "Converter ratios must satisfy 1/64 <= min <= max <= 64.");
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxConvertedVoices, -1);
         ArgumentOutOfRangeException.ThrowIfNegative(RatioRedesignsPerPass);
+        ArgumentOutOfRangeException.ThrowIfNegative(MaxReverbs);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxReverbs, 16);
+        if (!double.IsFinite(LimiterLookaheadMilliseconds) || LimiterLookaheadMilliseconds < 0 || LimiterLookaheadMilliseconds > 100)
+            throw new ArgumentOutOfRangeException(nameof(LimiterLookaheadMilliseconds));
         ResolveReservations();
     }
 }
@@ -284,7 +318,12 @@ public readonly record struct MixerEvent(MixerEventKind Kind, long VoiceId, long
 /// <item><description><b>Buses.</b> Every voice feeds one bus; each bus feeds the master output or another bus
 /// (<see cref="SetBusOutput"/>), so sub-mixes sum into their parent. Loops in the routing are rejected. A bus can duck another
 /// (<see cref="SetDucking"/>). Pan, bus gain and mute changes ramp over <see cref="MixerOptions.SmoothingMilliseconds"/>.</description></item>
-/// <item><description><b>Output.</b> The mix is summed, not clipped; a limiter effect is separate.</description></item>
+/// <item><description><b>Effects.</b> Every bus, and the master output, has a low-pass and a high-pass filter
+/// (<see cref="SetBusFilter"/>) and can host one of <see cref="MixerOptions.MaxReverbs"/> reverbs (<see cref="SetBusReverb"/>);
+/// each voice has its own filter pair (<see cref="SetVoiceFilter"/>). On a bus the order is filters, reverb, then the bus gain, so a
+/// muted bus is silent including its reverb tail, and ducking and the detector see the processed bus. Parameter changes glide.
+/// A master limiter (<see cref="SetLimiter"/>) is available when the mixer is created with a lookahead.</description></item>
+/// <item><description><b>Output.</b> The mix is summed, not clipped, unless the master limiter is on.</description></item>
 /// </list>
 /// </summary>
 public sealed partial class AudioMixer
@@ -314,11 +353,14 @@ public sealed partial class AudioMixer
         public long StartAt;
         public int Frames;
         public float F0, F1, F2, F3;
+        public ReverbSettings? Reverb;
+        public LimiterSettings? Limiter;
     }
 
     private enum CommandKind : byte
     {
         Play, Stop, StopAll, SetGain, SetPan, SetLoop, SetBusGain, SetPitch, SetBusMute, SetBusRoute, SetDuck, SetMasterGain,
+        SetBusFilter, SetVoiceFilter, SetBusReverb, SetLimiter,
     }
 
     private readonly int _sampleRate;
@@ -342,6 +384,11 @@ public sealed partial class AudioMixer
     private readonly int[] _ctlParent;
     private readonly int[] _ctlDuckSource;
     private readonly Dictionary<int, Stack<IResampler>> _pool = [];
+    private readonly int[] _ctlReverbSlot;      // per bus (index bus + 1, so 0 is the master): the reverb slot it holds, or -1
+    private readonly bool[] _ctlReverbBusy;
+    private readonly ReverbProcessor[] _reverbs;
+    private readonly LimiterProcessor? _limiter;
+    private int _limiterGainBits = BitConverter.SingleToInt32Bits(1f);
 
     private long _nextId;
     private long _timeline;
@@ -376,10 +423,21 @@ public sealed partial class AudioMixer
         Array.Fill(_ctlDuckSource, -1);
         _voiceCount = options.MaxVoices;
         _voices = new Voice[_voiceCount];
-        for (int i = 0; i < _voices.Length; i++) _voices[i] = new Voice(_channels, _maxSrcChannels);
+        for (int i = 0; i < _voices.Length; i++) _voices[i] = new Voice(_channels, _maxSrcChannels, _sampleRate);
         _buses = new Bus[options.MaxBuses];
-        for (int i = 0; i < _buses.Length; i++) _buses[i] = new Bus { Buf = new float[_channels * _maxBlock] };
-        _master = new Bus { Buf = new float[_channels * _maxBlock] };
+        for (int i = 0; i < _buses.Length; i++) _buses[i] = new Bus { Buf = new float[_channels * _maxBlock], Fx = new EffectChain(_channels, _sampleRate) };
+        _master = new Bus { Buf = new float[_channels * _maxBlock], Fx = new EffectChain(_channels, _sampleRate) };
+        _reverbs = new ReverbProcessor[options.MaxReverbs];
+        for (int i = 0; i < _reverbs.Length; i++) _reverbs[i] = new ReverbProcessor(_channels, _sampleRate);
+        _ctlReverbSlot = new int[options.MaxBuses + 1];
+        Array.Fill(_ctlReverbSlot, -1);
+        _ctlReverbBusy = new bool[options.MaxReverbs];
+        if (options.LimiterLookaheadMilliseconds > 0)
+        {
+            int look = Math.Max(1, (int)Math.Round(options.LimiterLookaheadMilliseconds * 0.001 * _sampleRate));
+            _limiter = new LimiterProcessor(look, _channels, _maxBlock);
+            _limiter.Configure(false, 1f, 0.1f, _sampleRate);
+        }
         _order = new int[_buses.Length];
         _indegree = new int[_buses.Length];
         _placed = new bool[_buses.Length];
@@ -397,6 +455,30 @@ public sealed partial class AudioMixer
 
     /// <summary>Play requests refused because every converter allowed by <see cref="MixerOptions.MaxConvertedVoices"/> was in use. Safe to read from any thread.</summary>
     public long DroppedConverterRequests => Volatile.Read(ref _droppedConverters);
+
+    /// <summary>
+    /// Delay, in frames, between the mix and the output that the master limiter's lookahead adds (see
+    /// <see cref="MixerOptions.LimiterLookaheadMilliseconds"/>); 0 when the mixer has no limiter. Constant for the mixer's lifetime.
+    /// Voice start times (<see cref="PlayParams.StartAtFrame"/>) and <see cref="TimelineFrames"/> refer to the mix, so what is heard
+    /// lags them by this many frames.
+    /// </summary>
+    public int LatencyFrames => _limiter?.LookaheadFrames ?? 0;
+
+    /// <summary>True when the mixer was created with a limiter (<see cref="MixerOptions.LimiterLookaheadMilliseconds"/> above 0).</summary>
+    public bool HasLimiter => _limiter != null;
+
+    /// <summary>
+    /// Gain reduction of the master limiter in the last render pass, in dB (0 or negative; 0 when the limiter is off or idle): the
+    /// deepest point of the gain curve in that pass. Safe to read from any thread.
+    /// </summary>
+    public float LimiterGainReductionDb
+    {
+        get
+        {
+            float g = BitConverter.Int32BitsToSingle(Volatile.Read(ref _limiterGainBits));
+            return g >= 1f ? 0f : 20f * MathF.Log10(Math.Max(g, 1e-6f));
+        }
+    }
 
     /// <summary>Output sample rate in Hz.</summary>
     public int SampleRate => _sampleRate;
@@ -635,7 +717,8 @@ public sealed partial class AudioMixer
     /// </summary>
     /// <param name="targetBus">The bus that is turned down.</param>
     /// <param name="sourceBus">The bus whose level is watched.</param>
-    /// <param name="settings">Threshold, depth and timing; null uses the defaults of <see cref="DuckingSettings"/>.</param>
+    /// <param name="settings">Threshold, depth and timing; null uses the defaults of <see cref="DuckingSettings"/>.
+    /// <see cref="DuckingSettings.None"/> removes the link, exactly like <see cref="ClearDucking"/>.</param>
     /// <returns>False if the command queue was full (nothing changed).</returns>
     /// <exception cref="ArgumentOutOfRangeException">A bus index or a setting is out of range.</exception>
     /// <exception cref="ArgumentException">Both are the same bus, or the link would make the target feed the source, directly or indirectly.</exception>
@@ -644,6 +727,7 @@ public sealed partial class AudioMixer
         CheckBus(targetBus, nameof(targetBus));
         CheckBus(sourceBus, nameof(sourceBus));
         settings ??= new DuckingSettings();
+        if (!settings.Enabled) return ClearDucking(targetBus);
         settings.Validate();
         double rate = _sampleRate;
         var cmd = new Command
@@ -682,6 +766,164 @@ public sealed partial class AudioMixer
         }
         Interlocked.Increment(ref _droppedCommands);
         return false;
+    }
+
+    // ---------------------------------------------------------------- effects
+
+    /// <summary>The bus index that names the master output in the effect calls.</summary>
+    public const int MasterBus = -1;
+
+    /// <summary>Q of a filter that has none given: a Butterworth response (maximally flat, -3 dB at the cutoff), 1/sqrt(2).</summary>
+    public const float DefaultFilterQ = 0.70710678f;
+
+    /// <summary>
+    /// Turns on, or retunes, a low-pass or high-pass filter (second order, 12 dB per octave) on a bus or on the master output. Each
+    /// bus has one filter of each type, so a band-pass is a low-pass and a high-pass together. The filter is the pre-warped bilinear
+    /// image of the analog prototype 1 / (s^2 + s/Q + 1), so the response follows the analog curve closely below a quarter of the sample rate.
+    /// Cutoff and Q glide (the cutoff on a logarithmic scale) over <paramref name="rampFrames"/>, so sweeps make no zipper noise, and
+    /// stay stable under any sequence of changes. A filter that was off glides in from the transparent setting unless <paramref name="rampFrames"/> is 0.
+    /// </summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
+    /// <param name="type">Which filter.</param>
+    /// <param name="cutoffHz">Cutoff in Hz (finite, above 0); clamped to 1 Hz up to 0.49 times the sample rate.</param>
+    /// <param name="q">Resonance (finite, above 0); clamped to 0.1 to 24. 0.707 is flat, higher values peak at the cutoff. Default <see cref="DefaultFilterQ"/>.</param>
+    /// <param name="rampFrames">Glide length in frames; 0 jumps at the next pass; negative uses <see cref="MixerOptions.SmoothingMilliseconds"/>.</param>
+    /// <returns>False if the command queue was full.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The bus, cutoff or Q is out of range.</exception>
+    public bool SetBusFilter(int bus, FilterType type, float cutoffHz, float q = DefaultFilterQ, int rampFrames = -1)
+    {
+        CheckEffectBus(bus);
+        CheckFilter(type, cutoffHz, q);
+        return Enqueue(new Command { Kind = CommandKind.SetBusFilter, Bus = bus, Aux = (int)type, F0 = cutoffHz, F1 = q, Flag = true, Frames = rampFrames });
+    }
+
+    /// <summary>Turns a bus filter off. It glides to the transparent setting first (unless <paramref name="rampFrames"/> is 0), then stops costing anything.</summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
+    /// <param name="type">Which filter.</param>
+    /// <param name="rampFrames">Glide length in frames; 0 switches off at the next pass; negative uses <see cref="MixerOptions.SmoothingMilliseconds"/>.</param>
+    /// <returns>False if the command queue was full.</returns>
+    public bool ClearBusFilter(int bus, FilterType type, int rampFrames = -1)
+    {
+        CheckEffectBus(bus);
+        if (!Enum.IsDefined(type)) throw new ArgumentOutOfRangeException(nameof(type));
+        return Enqueue(new Command { Kind = CommandKind.SetBusFilter, Bus = bus, Aux = (int)type, Flag = false, Frames = rampFrames });
+    }
+
+    /// <summary>
+    /// Like <see cref="SetBusFilter"/> for one voice, applied to the voice's own channels before its gain and pan; the typical use is
+    /// a muffling low-pass for a sound behind a wall. With <paramref name="rampFrames"/> 0 right after <see cref="Play"/> the voice starts filtered.
+    /// A stale handle is ignored.
+    /// </summary>
+    /// <param name="voice">The voice.</param>
+    /// <param name="type">Which filter.</param>
+    /// <param name="cutoffHz">Cutoff in Hz (finite, above 0); clamped to 1 Hz up to 0.49 times the sample rate.</param>
+    /// <param name="q">Resonance (finite, above 0); clamped to 0.1 to 24. Default <see cref="DefaultFilterQ"/>.</param>
+    /// <param name="rampFrames">Glide length in frames; 0 jumps at the next pass; negative uses <see cref="MixerOptions.SmoothingMilliseconds"/>.</param>
+    /// <returns>False if the command queue was full.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The cutoff or Q is out of range.</exception>
+    public bool SetVoiceFilter(VoiceHandle voice, FilterType type, float cutoffHz, float q = DefaultFilterQ, int rampFrames = -1)
+    {
+        CheckFilter(type, cutoffHz, q);
+        return Enqueue(new Command { Kind = CommandKind.SetVoiceFilter, Id = voice.Id, Aux = (int)type, F0 = cutoffHz, F1 = q, Flag = true, Frames = rampFrames });
+    }
+
+    /// <summary>Turns a voice filter off, like <see cref="ClearBusFilter"/>.</summary>
+    /// <param name="voice">The voice.</param>
+    /// <param name="type">Which filter.</param>
+    /// <param name="rampFrames">Glide length in frames; 0 switches off at the next pass; negative uses <see cref="MixerOptions.SmoothingMilliseconds"/>.</param>
+    /// <returns>False if the command queue was full.</returns>
+    public bool ClearVoiceFilter(VoiceHandle voice, FilterType type, int rampFrames = -1)
+    {
+        if (!Enum.IsDefined(type)) throw new ArgumentOutOfRangeException(nameof(type));
+        return Enqueue(new Command { Kind = CommandKind.SetVoiceFilter, Id = voice.Id, Aux = (int)type, Flag = false, Frames = rampFrames });
+    }
+
+    /// <summary>
+    /// Puts a reverb on a bus or on the master output, or retunes the one there. It is an insert: the bus's signal goes in and
+    /// <c>Dry * signal + Wet * reverb</c> comes out, after the bus filters and before the bus gain. The reverb works on all of the mixer's
+    /// output channels, with a different decorrelation for each. The tail keeps ringing after the bus's voices stop and the reverb
+    /// goes idle (costing nothing) once it has decayed below about -120 dB. At most <see cref="MixerOptions.MaxReverbs"/> buses can
+    /// have one at once. Changes glide over <paramref name="rampFrames"/>; a changing <see cref="ReverbSettings.RoomSize"/> bends the
+    /// tail's pitch while it moves.
+    /// </summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
+    /// <param name="settings">The reverb's parameters.</param>
+    /// <param name="rampFrames">Glide length in frames for a change to a running reverb; 0 jumps at the next pass; negative uses <see cref="MixerOptions.SmoothingMilliseconds"/>. A reverb that is just being added starts with these settings at once.</param>
+    /// <returns>False if the command queue was full, or if every reverb is in use by other buses (nothing changed).</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The bus or a setting is out of range.</exception>
+    public bool SetBusReverb(int bus, ReverbSettings settings, int rampFrames = -1)
+    {
+        CheckEffectBus(bus);
+        ArgumentNullException.ThrowIfNull(settings);
+        settings.Validate();
+        lock (_controlLock)
+        {
+            int slot = _ctlReverbSlot[bus + 1];
+            bool added = slot < 0;
+            if (added)
+            {
+                slot = Array.IndexOf(_ctlReverbBusy, false);
+                if (slot < 0) return false;
+            }
+            if (_commands.TryEnqueue(new Command { Kind = CommandKind.SetBusReverb, Bus = bus, Aux = slot, Flag = true, Reverb = settings, Frames = rampFrames }))
+            {
+                _ctlReverbSlot[bus + 1] = slot;
+                _ctlReverbBusy[slot] = true;
+                return true;
+            }
+        }
+        Interlocked.Increment(ref _droppedCommands);
+        return false;
+    }
+
+    /// <summary>Removes the reverb from a bus. The tail stops at once; to fade it out, set <see cref="ReverbSettings.Wet"/> to 0 first and remove it later.</summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
+    /// <returns>False if the command queue was full.</returns>
+    public bool ClearBusReverb(int bus)
+    {
+        CheckEffectBus(bus);
+        lock (_controlLock)
+        {
+            int slot = _ctlReverbSlot[bus + 1];
+            if (slot < 0) return true;
+            if (_commands.TryEnqueue(new Command { Kind = CommandKind.SetBusReverb, Bus = bus, Aux = slot, Flag = false }))
+            {
+                _ctlReverbSlot[bus + 1] = -1;
+                _ctlReverbBusy[slot] = false;
+                return true;
+            }
+        }
+        Interlocked.Increment(ref _droppedCommands);
+        return false;
+    }
+
+    /// <summary>
+    /// Switches the master limiter on, or retunes it, or (with null) off. The limiter is a lookahead brickwall: no output sample
+    /// exceeds <see cref="LimiterSettings.CeilingDb"/>, it does not touch audio below that level other than delaying it by
+    /// <see cref="LatencyFrames"/>, and it reduces the gain gradually over the lookahead before a peak arrives. It limits sample
+    /// peaks, not inter-sample peaks. Switching it off lets the gain recover with the release time; the delay stays. A ceiling lowered
+    /// while loud audio is already in the delay line is enforced by a final clamp for up to one lookahead.
+    /// </summary>
+    /// <param name="settings">Ceiling and release, or null to switch the limiter off.</param>
+    /// <returns>False if the mixer has no limiter (<see cref="HasLimiter"/>) or the command queue was full.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">A setting is out of range.</exception>
+    public bool SetLimiter(LimiterSettings? settings)
+    {
+        if (_limiter == null) return false;
+        settings?.Validate();
+        return Enqueue(new Command { Kind = CommandKind.SetLimiter, Limiter = settings, Flag = settings != null });
+    }
+
+    private void CheckEffectBus(int bus)
+    {
+        if (bus < -1 || bus >= _ctlParent.Length) throw new ArgumentOutOfRangeException(nameof(bus), "Bus out of range.");
+    }
+
+    private static void CheckFilter(FilterType type, float cutoffHz, float q)
+    {
+        if (!Enum.IsDefined(type)) throw new ArgumentOutOfRangeException(nameof(type));
+        if (!float.IsFinite(cutoffHz) || cutoffHz <= 0f) throw new ArgumentOutOfRangeException(nameof(cutoffHz), "The cutoff must be finite and above 0.");
+        if (!float.IsFinite(q) || q <= 0f) throw new ArgumentOutOfRangeException(nameof(q), "Q must be finite and above 0.");
     }
 
     /// <summary>Takes the next pending event, oldest first. Poll it from the game thread; nothing is called back on the render thread.</summary>
