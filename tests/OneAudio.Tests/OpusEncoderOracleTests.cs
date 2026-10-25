@@ -37,6 +37,37 @@ public class OpusEncoderOracleTests
 
     private static readonly string[] BandwidthNames = ["", "NB", "MB", "WB", "SWB", "FB"];
 
+    // Low bitrates, where the reference picks the SILK or hybrid mode, and voip.
+    public static TheoryData<int, int, int, string, int, int, int> LowRateCases()
+    {
+        var d = new TheoryData<int, int, int, string, int, int, int>();
+        foreach (int ch in new[] { 1, 2 })
+            foreach (int rate in new[] { 6000, 12000, 20000, 26000 })
+                foreach (int ms10 in new[] { 100, 200, 400, 600 })
+                    d.Add(ch, rate, ms10, "audio", 10, 0, 0);
+        foreach (int ch in new[] { 1, 2 })
+            foreach (int cx in new[] { 0, 2, 5, 8 })
+                d.Add(ch, 16000, 200, "audio", cx, 0, 0);
+        foreach (int ch in new[] { 1, 2 })
+            foreach (int bw in new[] { 1, 3 })
+                d.Add(ch, 16000, 200, "audio", 10, 0, bw);
+        foreach (int ch in new[] { 1, 2 })
+            foreach (int mode in new[] { 1, 2 })
+                d.Add(ch, 16000, 200, "audio", 10, mode, 0);
+        foreach (int ch in new[] { 1, 2 })
+            foreach (int rate in new[] { 12000, 24000, 40000 })
+                d.Add(ch, rate, 200, "voip", 10, 0, 0);
+        foreach (int ch in new[] { 1, 2 })
+            foreach (int rate in new[] { 24000, 27000, 30000 })
+                d.Add(ch, rate, 200, "audio", 10, 0, 4);
+        return d;
+    }
+
+    [Theory]
+    [MemberData(nameof(LowRateCases))]
+    public void MatchesReferenceBytesLowRate(int channels, int bitrate, int ms10, string app, int complexity, int rateMode, int bandwidth)
+        => MatchesReferenceBytes(channels, bitrate, ms10, app, complexity, rateMode, bandwidth);
+
     [Theory]
     [MemberData(nameof(Cases))]
     public void MatchesReferenceBytes(int channels, int bitrate, int ms10, string app, int complexity, int rateMode, int bandwidth)

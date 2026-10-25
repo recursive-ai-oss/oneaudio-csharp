@@ -19,7 +19,19 @@ public class OpusEncoderTests
                 foreach (int rate in new[] { 12000, 64000, 256000 })
                     foreach (int cx in new[] { 0, 10 })
                         d.Add(ch, 200, rate, cx, mode, 1, OpusBandwidth.Auto, OpusApplication.Audio);
+        // SILK, hybrid and their frame sizes, bandwidths and complexities
+        foreach (int ch in new[] { 1, 2 })
+            foreach (int ms10 in new[] { 100, 200, 400, 600 })
+                foreach (var bw in new[] { OpusBandwidth.Narrowband, OpusBandwidth.Mediumband, OpusBandwidth.Wideband, OpusBandwidth.SuperWideband, OpusBandwidth.Fullband })
+                    d.Add(ch, ms10, ch == 1 ? 14000 : 26000, 10, OpusBitrateMode.Vbr, 7, bw, OpusApplication.Audio);
+        foreach (int ch in new[] { 1, 2 })
+            foreach (int cx in new[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 })
+                d.Add(ch, 200, 16000 * ch, cx, OpusBitrateMode.Vbr, 8, OpusBandwidth.Auto, OpusApplication.Audio);
+        foreach (var mode in new[] { OpusBitrateMode.ConstrainedVbr, OpusBitrateMode.Cbr })
+            foreach (int ms10 in new[] { 100, 200, 600 })
+                d.Add(2, ms10, 20000, 10, mode, 8, OpusBandwidth.Auto, OpusApplication.Audio);
         d.Add(2, 200, 40000, 10, OpusBitrateMode.Vbr, 1, OpusBandwidth.Auto, OpusApplication.Voip);
+        d.Add(1, 200, 12000, 10, OpusBitrateMode.Vbr, 1, OpusBandwidth.Auto, OpusApplication.Voip);
         d.Add(1, 100, 40000, 10, OpusBitrateMode.Cbr, 1, OpusBandwidth.Auto, OpusApplication.RestrictedLowDelay);
         return d;
     }
@@ -90,15 +102,30 @@ public class OpusEncoderTests
     {
         foreach (int ch in new[] { 1, 2 })
         {
-            var enc = new OpusEncoder(new OpusEncoderSettings { Channels = ch, BitrateBps = 64000 * ch / 2 });
-            var pcm = OpusEncoderSupport.ToFloat(OpusEncoderSupport.MakeSignal(ch, 960 * 40, 5));
+            // one settings object per bitrate, so switching between SILK, hybrid and CELT allocates nothing either
+            int[] rates = [64000 * ch / 2, 12000 * ch, 24000 * ch, 12000 * ch, 64000 * ch / 2];
+            var settings = new OpusEncoderSettings[rates.Length];
+            for (int i = 0; i < rates.Length; i++)
+                settings[i] = new OpusEncoderSettings { Channels = ch, BitrateBps = rates[i], InBandFec = true, PacketLossPercent = 10 };
+            var enc = new OpusEncoder(settings[0]);
+            var pcm = OpusEncoderSupport.ToFloat(OpusEncoderSupport.MakeSpeechLike(ch, 960 * 80, 5));
             var packet = new byte[1500];
             int frame = 960 * ch;
-            for (int i = 0; i < 20; i++) enc.Encode(pcm.AsSpan(i * frame, frame), 960, packet);
+            for (int i = 0; i < 20; i++)
+            {
+                enc.Settings = settings[i % settings.Length];
+                enc.Encode(pcm.AsSpan(i * frame, frame), 960, packet);
+            }
             long before = GC.GetAllocatedBytesForCurrentThread();
             int gcs = GC.CollectionCount(0);
-            for (int i = 20; i < 40; i++) enc.Encode(pcm.AsSpan(i * frame, frame), 960, packet);
+            for (int i = 20; i < 80; i++)
+            {
+                enc.Settings = settings[i % settings.Length];
+                enc.Encode(pcm.AsSpan(i * frame, frame), 960, packet);
+            }
             for (int i = 0; i < 4; i++) enc.Encode(pcm.AsSpan(i * 1920 * ch, 1920 * ch), 1920, packet);
+            enc.Settings = settings[1];
+            for (int i = 0; i < 4; i++) enc.Encode(pcm.AsSpan(i * 2880 * ch, 2880 * ch), 2880, packet);
             long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.Equal(0, allocated);
             Assert.Equal(gcs, GC.CollectionCount(0));

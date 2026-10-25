@@ -263,6 +263,10 @@ internal static class SilkLtpEnc
         }
     }
 
+    private static readonly sbyte[][] LtpCodebooks = [SilkTables.LTPGainVq0, SilkTables.LTPGainVq1, SilkTables.LTPGainVq2];
+    private static readonly byte[][] LtpCodebookBits = [SilkEncTables.LTPGainBitsQ50, SilkEncTables.LTPGainBitsQ51, SilkEncTables.LTPGainBitsQ52];
+    private static readonly int[] LtpCodebookSizes = [8, 16, 32];
+
     /// <summary>silk_quant_LTP_gains_FLP: picks the codebook (periodicity) and per-subframe entries by rate-distortion.</summary>
     public static void QuantLtpGains(Span<float> B, Span<sbyte> cbkIndex, out sbyte periodicityIndex, ReadOnlySpan<float> W,
         int muQ9, bool lowComplexity, int nbSubfr)
@@ -273,9 +277,9 @@ internal static class SilkLtpEnc
         for (int i = 0; i < nbSubfr * LtpOrder; i++) bQ14[i] = (short)SilkFlp.Float2Int(B[i] * 16384.0f);
         for (int i = 0; i < nbSubfr * LtpOrder * LtpOrder; i++) wQ18[i] = SilkFlp.Float2Int(W[i] * 262144.0f);
 
-        sbyte[][] cbks = [SilkTables.LTPGainVq0, SilkTables.LTPGainVq1, SilkTables.LTPGainVq2];
-        byte[][] bits = [SilkEncTables.LTPGainBitsQ50, SilkEncTables.LTPGainBitsQ51, SilkEncTables.LTPGainBitsQ52];
-        int[] sizes = [8, 16, 32];
+        var cbks = LtpCodebooks;
+        var bits = LtpCodebookBits;
+        var sizes = LtpCodebookSizes;
         int minRateDistQ14 = int.MaxValue;
         periodicityIndex = 0;
         for (int k = 0; k < 3; k++)

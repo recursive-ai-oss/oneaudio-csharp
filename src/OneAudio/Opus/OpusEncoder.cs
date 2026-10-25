@@ -2,14 +2,16 @@ namespace OneAudio.Opus;
 
 /// <summary>
 /// A packet-level Opus encoder (RFC 6716 section 5): turns interleaved 48 kHz PCM into Opus packets, one packet per
-/// call. Frame sizes of 2.5, 5, 10, 20, 40 and 60 ms are accepted; 40 and 60 ms packets hold two or three 20 ms frames.
+/// call. Frame sizes of 2.5, 5, 10, 20, 40 and 60 ms are accepted; 40 and 60 ms packets hold two or three 20 ms frames
+/// (or one SILK packet of that length).
 /// </summary>
 /// <remarks>
-/// <para>This version codes with the CELT layer for every bitrate and bandwidth (the mode, bandwidth and rate logic of
-/// the reference encoder is in place; SILK and hybrid packets are not produced). Input is interleaved
-/// <see cref="float"/> with full scale ±1.0, clipped at ±2.0 and never rounded. Output is deterministic for identical
-/// input and settings on a platform. After construction, <see cref="Encode(ReadOnlySpan{float}, int, Span{byte})"/>
-/// allocates nothing. Instances are not thread safe.</para>
+/// <para>Like the reference encoder, it picks the SILK, hybrid or CELT mode and the audio bandwidth from the bitrate, the frame
+/// size and the application, and switches between them with a redundant CELT frame and decoder-state prefill. Settings
+/// can be changed between packets. Input is interleaved <see cref="float"/> with full scale ±1.0, clipped at ±2.0 for
+/// CELT and rounded to 16 bits for SILK. Output is deterministic for identical input and settings on a platform. After
+/// construction, <see cref="Encode(ReadOnlySpan{float}, int, Span{byte})"/> allocates nothing. Instances are not
+/// thread safe.</para>
 /// <para>Derived from the reference encoder in RFC 6716 (Simplified BSD licence, see THIRD-PARTY-NOTICES.md).</para>
 /// </remarks>
 public sealed class OpusEncoder
@@ -17,6 +19,7 @@ public sealed class OpusEncoder
     private const int ModeSilk = 1000;
     private const int ModeHybrid = 1001;
     private const int ModeCelt = 1002;
+    private const int AutoValue = -1000;
     private const int Fs = 48000;
     private const int MaxEncoderBuffer = 480;
 
@@ -38,6 +41,15 @@ public sealed class OpusEncoder
     private readonly byte[] _subFrames = new byte[3 * 1280];
     private readonly int[] _subLen = new int[3];
     private readonly float[] _hpMem = new float[4];
+    private readonly SilkEncoder _silk = new();
+    private readonly SilkEncControl _ctl = new();
+    private readonly short[] _pcmSilk = new short[2880 * 2];
+    private readonly float[] _tmpPrefill = new float[(Fs / 400) * 2];
+    private readonly byte[] _dummy2 = new byte[2];
+    private int _prevMode;
+    private bool _silkBwSwitch;
+    private short _hybridStereoWidthQ14 = 1 << 14;
+    private int _userForcedMode = AutoValue;
 
     private int _streamChannels;
     private int _mode;
@@ -129,12 +141,46 @@ public sealed class OpusEncoder
         _forceChannels = _s.ForceChannels == 0 ? -1000 : _s.ForceChannels;
         _celt.Complexity = _s.Complexity;
         _celt.LossRate = _s.PacketLossPercent;
+        _ctl.Complexity = _s.Complexity;
+        _ctl.PacketLossPercentage = _s.PacketLossPercent;
+        _ctl.UseInBandFec = _s.InBandFec;
+        _ctl.UseDtx = _s.Dtx;
+    }
+
+    private void ResetControl()
+    {
+        var c = _ctl;
+        c.NChannelsApi = _channels;
+        c.NChannelsInternal = _channels;
+        c.ApiSampleRate = Fs;
+        c.MaxInternalSampleRate = 16000;
+        c.MinInternalSampleRate = 8000;
+        c.DesiredInternalSampleRate = 16000;
+        c.PayloadSizeMs = 20;
+        c.BitRate = 25000;
+        c.UseCbr = false;
+        c.ToMono = false;
+        c.OpusCanSwitch = false;
+        c.InternalSampleRate = 0;
+        c.AllowBandwidthSwitch = false;
+        c.InWbModeWithoutVariableLp = false;
+        c.StereoWidthQ14 = 0;
+        c.SwitchReady = false;
+        c.Complexity = _s.Complexity;
+        c.PacketLossPercentage = _s.PacketLossPercent;
+        c.UseInBandFec = _s.InBandFec;
+        c.UseDtx = _s.Dtx;
     }
 
     /// <summary>Clears all signal history, as for a new stream.</summary>
     public void Reset()
     {
         _celt.Reset();
+        _silk.Init();
+        ResetControl();
+        _prevMode = 0;
+        _silkBwSwitch = false;
+        _hybridStereoWidthQ14 = 1 << 14;
         _streamChannels = _channels;
         _prevChannels = 0;
         _prevFramesize = 0;
@@ -179,6 +225,9 @@ public sealed class OpusEncoder
             throw new InvalidOperationException("The encoder failed to produce a packet.");
         return ret;
     }
+
+    /// <summary>Forces the coding mode (1000 SILK, 1001 hybrid, 1002 CELT) or -1000 for automatic; for tests against the reference encoder.</summary>
+    internal void ForceMode(int mode) => _userForcedMode = mode;
 
     private static void CheckFrame(int frameSize)
     {
@@ -289,11 +338,45 @@ public sealed class OpusEncoder
         _ => 21,
     };
 
+    private static short Float2Int16(float x)
+    {
+        x *= 32768f;
+        x = Math.Max(x, -32768f);
+        x = Math.Min(x, 32767f);
+        return (short)SilkFlp.Float2Int(x);
+    }
+
+    // g1/g2 are the previous and new stereo widths; blends the side signal in over the CELT overlap window (opus_encoder.c stereo_fade).
+    private static void StereoFade(Span<float> buf, float g1, float g2, int overlap, int frameSize, int channels)
+    {
+        g1 = 1f - g1;
+        g2 = 1f - g2;
+        var window = CeltTables.Window;
+        int i;
+        for (i = 0; i < overlap; i++)
+        {
+            float w = window[i] * window[i];
+            float g = w * g2 + (1f - w) * g1;
+            float diff = 0.5f * (buf[i * channels] - buf[i * channels + 1]);
+            diff = g * diff;
+            buf[i * channels] = buf[i * channels] - diff;
+            buf[i * channels + 1] = buf[i * channels + 1] + diff;
+        }
+        for (; i < frameSize; i++)
+        {
+            float diff = 0.5f * (buf[i * channels] - buf[i * channels + 1]);
+            diff = g2 * diff;
+            buf[i * channels] = buf[i * channels] - diff;
+            buf[i * channels + 1] = buf[i * channels + 1] + diff;
+        }
+    }
+
     private int EncodeNative(ReadOnlySpan<float> pcm, int frameSize, Span<byte> data, int maxDataBytes, bool inner, bool selfDelimited = false)
     {
         maxDataBytes = Math.Min(maxDataBytes, 1276);
         _rangeFinal = 0;
         if (maxDataBytes <= 0) return -1;
+        var ctl = _ctl;
         int delayCompensation = _delayCompensation;
         int bitrateBps = UserBitrateToBitrate(frameSize, maxDataBytes);
         int frameRate = Fs / frameSize;
@@ -317,6 +400,7 @@ public sealed class OpusEncoder
             bitrateBps = cbrBytes * (8 * frameRate);
             maxDataBytes = cbrBytes;
         }
+        int maxRate = frameRate * maxDataBytes * 8;
         int equivRate = bitrateBps - 60 * (Fs / frameSize - 50);
         int voiceEst;
         if (_s.Signal == OpusSignal.Voice) voiceEst = 127;
@@ -335,12 +419,67 @@ public sealed class OpusEncoder
         }
         else _streamChannels = _channels;
 
-        // SILK and hybrid packets are not produced by this encoder, so every frame uses the CELT mode.
-        _mode = ModeCelt;
+        // Mode choice (RFC 6716 section 2.1.3 leaves it to the encoder): CELT above a bitrate threshold, SILK below it.
+        if (_application == OpusApplication.RestrictedLowDelay)
+            _mode = ModeCelt;
+        else if (_userForcedMode == AutoValue)
+        {
+            const int modeVoice = 48000, modeMusic = 24000;
+            int threshold = modeMusic + ((voiceEst * voiceEst * (modeVoice - modeMusic)) >> 14);
+            if (_prevMode == ModeCelt) threshold -= 4000;
+            else if (_prevMode > 0) threshold += 4000;
+            _mode = equivRate >= threshold ? ModeCelt : ModeSilk;
+            if (ctl.UseInBandFec && ctl.PacketLossPercentage > (128 - voiceEst) >> 4) _mode = ModeSilk;
+            if (ctl.UseDtx && voiceEst > 100) _mode = ModeSilk;
+        }
+        else _mode = _userForcedMode;
+        if (_mode != ModeCelt && frameSize < Fs / 100) _mode = ModeCelt;
 
+        if (_streamChannels == 1 && _prevChannels == 2 && !ctl.ToMono && _mode != ModeCelt && _prevMode != ModeCelt)
+        {
+            // Stereo to mono: SILK fades the side channel out over this packet before the stream really goes mono.
+            ctl.ToMono = true;
+            _streamChannels = 2;
+        }
+        else ctl.ToMono = false;
+
+        bool redundancy = false, celtToSilk = false, toCelt = false, prefill = false;
+        if (_prevMode > 0 && ((_mode != ModeCelt && _prevMode == ModeCelt) || (_mode == ModeCelt && _prevMode != ModeCelt)))
+        {
+            redundancy = true;
+            celtToSilk = _mode != ModeCelt;
+            if (!celtToSilk)
+            {
+                // Switching to CELT: this frame still uses the previous mode and carries a redundant CELT frame.
+                if (frameSize >= Fs / 100)
+                {
+                    _mode = _prevMode;
+                    toCelt = true;
+                }
+                else redundancy = false;
+            }
+        }
+        if (_silkBwSwitch)
+        {
+            redundancy = true;
+            celtToSilk = true;
+            _silkBwSwitch = false;
+        }
+        if (_mode != ModeCelt && _prevMode == ModeCelt)
+        {
+            _silk.Init();
+            prefill = true;
+        }
+
+        if (_mode == ModeCelt || _first || ctl.AllowBandwidthSwitch)
         {
             int bandwidth = (int)OpusBandwidth.Fullband;
             int equivRate2 = equivRate;
+            if (_mode != ModeCelt)
+            {
+                equivRate2 = equivRate2 * (45 + ctl.Complexity) / 50;
+                if (!useVbr) equivRate2 -= 1000;
+            }
             int[] voiceTh, musicTh;
             if (_channels == 2 && _forceChannels != 1)
             {
@@ -367,49 +506,57 @@ public sealed class OpusEncoder
                 if (equivRate2 >= threshold) break;
             } while (--bandwidth > (int)OpusBandwidth.Narrowband);
             _bandwidth = bandwidth;
+            // Without the variable low-pass the SILK layer cannot code more than wideband.
+            if (!_first && _mode != ModeCelt && !ctl.InWbModeWithoutVariableLp && _bandwidth > (int)OpusBandwidth.Wideband)
+                _bandwidth = (int)OpusBandwidth.Wideband;
         }
         if (_bandwidth > (int)_s.MaxBandwidth) _bandwidth = (int)_s.MaxBandwidth;
         if (_userBandwidth != -1000) _bandwidth = _userBandwidth;
-        if (_bandwidth == (int)OpusBandwidth.Mediumband) _bandwidth = (int)OpusBandwidth.Wideband;
+        if (_mode != ModeCelt && maxRate < 15000) _bandwidth = Math.Min(_bandwidth, (int)OpusBandwidth.Wideband);
+        if (maxDataBytes < (frameRate > 50 ? 12000 : 8000) * frameSize / (Fs * 8)) _mode = ModeCelt;
+        if (_mode == ModeCelt && _bandwidth == (int)OpusBandwidth.Mediumband) _bandwidth = (int)OpusBandwidth.Wideband;
 
         // Long frames are coded as several 20 ms frames and packed into one packet (RFC 6716 section 3.2).
-        if (frameSize > Fs / 50)
+        if (frameSize > Fs / 50 && (_mode == ModeCelt || _bandwidth > (int)OpusBandwidth.Wideband))
         {
             int nbFrames = frameSize > Fs / 25 ? 3 : 2;
             int bytesPerFrame = maxDataBytes / nbFrames - 3;
             if (bytesPerFrame < 2) return -1;
-            int bakBandwidth = _userBandwidth, bakChannels = _forceChannels;
+            int bakMode = _userForcedMode, bakBandwidth = _userBandwidth, bakChannels = _forceChannels;
+            _userForcedMode = _mode;
             _userBandwidth = _bandwidth;
             _forceChannels = _streamChannels;
-            _prevChannels = _streamChannels;
+            bool bakToMono = ctl.ToMono;
+            if (bakToMono) _forceChannels = 1;
+            else _prevChannels = _streamChannels;
             int chStride = Fs / 50 * _channels;
             for (int i = 0; i < nbFrames; i++)
             {
+                ctl.ToMono = false;
+                if (toCelt && i == nbFrames - 1) _userForcedMode = ModeCelt;
                 int len = EncodeNative(pcm.Slice(i * chStride), Fs / 50, _subFrames.AsSpan(i * 1280, bytesPerFrame), bytesPerFrame, true);
                 if (len < 0) return -1;
                 _subLen[i] = len;
             }
+            _userForcedMode = bakMode;
             _userBandwidth = bakBandwidth;
             _forceChannels = bakChannels;
-            int ret = Pack(nbFrames, data, selfDelimited ? data.Length : maxDataBytes, selfDelimited);
-            if (ret < 0) return -1;
-            if (!useVbr && ret >= 3 && !inner && !selfDelimited)
-            {
-                if (PadFrame(data, ret, maxDataBytes)) return -1;
-                ret = maxDataBytes;
-            }
-            return ret;
+            ctl.ToMono = bakToMono;
+            return Pack(nbFrames, data, selfDelimited ? data.Length : maxDataBytes, selfDelimited);
         }
 
         int currBandwidth = _bandwidth;
+        if (_mode == ModeSilk && currBandwidth > (int)OpusBandwidth.Wideband) _mode = ModeHybrid;
+        if (_mode == ModeHybrid && currBandwidth <= (int)OpusBandwidth.Wideband) _mode = ModeSilk;
         int bytesTarget = Math.Min(maxDataBytes, bitrateBps * frameSize / (Fs * 8)) - 1;
         var body = data.Slice(1);
+        var enc = new RangeEncoder(body, maxDataBytes - 1);
         int ch = _channels;
         var pcmBuf = _pcmBuf;
         int encoderBuffer = Fs / 100;
         for (int i = 0; i < delayCompensation * ch; i++)
             pcmBuf[i] = _delayBuffer[(encoderBuffer - delayCompensation) * ch + i];
-        int hpFreqSmth1 = Lin2Log(60) << 8;
+        int hpFreqSmth1 = _mode == ModeCelt ? Lin2Log(60) << 8 : _silk.Channel0.VariableHpSmth1Q15;
         _variableHpSmth2Q15 = SilkMath.SMlaWB(_variableHpSmth2Q15, hpFreqSmth1 - _variableHpSmth2Q15, FixConst(0.015, 16));
         int cutoffHz = SilkMath.Log2Lin(_variableHpSmth2Q15 >> 8);
         if (_application == OpusApplication.Voip)
@@ -417,50 +564,231 @@ public sealed class OpusEncoder
         else
             pcm.Slice(0, frameSize * ch).CopyTo(pcmBuf.AsSpan(delayCompensation * ch));
 
+        int ret = 0;
+        if (_mode != ModeCelt)
+        {
+            var pcmSilk = _pcmSilk;
+            ctl.BitRate = 8 * bytesTarget * frameRate;
+            if (_mode == ModeHybrid)
+            {
+                ctl.BitRate /= _streamChannels;
+                if (currBandwidth == (int)OpusBandwidth.SuperWideband)
+                {
+                    if (Fs == 100 * frameSize) ctl.BitRate = ((ctl.BitRate + 2000 + (useVbr ? 1 : 0) * 1000) * 2) / 3;
+                    else ctl.BitRate = ((ctl.BitRate + 1000 + (useVbr ? 1 : 0) * 1000) * 2) / 3;
+                }
+                else
+                {
+                    if (Fs == 100 * frameSize) ctl.BitRate = (ctl.BitRate + 8000 + (useVbr ? 1 : 0) * 3000) / 2;
+                    else ctl.BitRate = (ctl.BitRate + 9000 + (useVbr ? 1 : 0) * 1000) / 2;
+                }
+                ctl.BitRate *= _streamChannels;
+                if (ctl.BitRate > (bitrateBps - 8 * Fs / frameSize) * 4 / 5)
+                    ctl.BitRate = (bitrateBps - 8 * Fs / frameSize) * 4 / 5;
+            }
+            ctl.PayloadSizeMs = 1000 * frameSize / Fs;
+            ctl.NChannelsApi = _channels;
+            ctl.NChannelsInternal = _streamChannels;
+            if (currBandwidth == (int)OpusBandwidth.Narrowband) ctl.DesiredInternalSampleRate = 8000;
+            else if (currBandwidth == (int)OpusBandwidth.Mediumband) ctl.DesiredInternalSampleRate = 12000;
+            else ctl.DesiredInternalSampleRate = 16000;
+            ctl.MinInternalSampleRate = _mode == ModeHybrid ? 16000 : 8000;
+            if (_mode == ModeSilk)
+            {
+                int effectiveMaxRate = maxRate;
+                ctl.MaxInternalSampleRate = 16000;
+                if (frameRate > 50) effectiveMaxRate = effectiveMaxRate * 2 / 3;
+                if (effectiveMaxRate < 13000)
+                {
+                    ctl.MaxInternalSampleRate = 12000;
+                    ctl.DesiredInternalSampleRate = Math.Min(12000, ctl.DesiredInternalSampleRate);
+                }
+                if (effectiveMaxRate < 9600)
+                {
+                    ctl.MaxInternalSampleRate = 8000;
+                    ctl.DesiredInternalSampleRate = Math.Min(8000, ctl.DesiredInternalSampleRate);
+                }
+            }
+            else ctl.MaxInternalSampleRate = 16000;
+            ctl.UseCbr = !useVbr;
+            int nBytes = Math.Min(1275, maxDataBytes - 1);
+            ctl.MaxBits = nBytes * 8;
+            if (_mode == ModeHybrid) ctl.MaxBits = ctl.MaxBits * 9 / 10;
+            if (ctl.UseCbr)
+            {
+                ctl.MaxBits = (ctl.BitRate * frameSize / (Fs * 8)) * 8;
+                ctl.BitRate = Math.Max(1, ctl.BitRate - 2000);
+            }
+            if (redundancy) ctl.MaxBits -= ctl.MaxBits / (1 + frameSize / (Fs / 200));
+            if (prefill)
+            {
+                // Replay the last 10 ms so SILK starts with warmed-up filters after CELT-only packets.
+                for (int i = 0; i < encoderBuffer * ch; i++) pcmSilk[i] = Float2Int16(_delayBuffer[i]);
+                var dummyRc = new RangeEncoder(Span<byte>.Empty, 0);
+                int zero = 0;
+                _silk.Encode(ctl, pcmSilk.AsSpan(0, encoderBuffer * ch), encoderBuffer, ref dummyRc, ref zero, true);
+            }
+            for (int i = 0; i < frameSize * ch; i++) pcmSilk[i] = Float2Int16(pcmBuf[delayCompensation * ch + i]);
+            _silk.Encode(ctl, pcmSilk.AsSpan(0, frameSize * ch), frameSize, ref enc, ref nBytes, false);
+            if (nBytes == 0)
+            {
+                // DTX: nothing to send.
+                _rangeFinal = 0;
+                data[0] = GenToc(_mode, Fs / frameSize, currBandwidth, _streamChannels);
+                return 1;
+            }
+            if (_mode == ModeSilk)
+            {
+                if (ctl.InternalSampleRate == 8000) currBandwidth = (int)OpusBandwidth.Narrowband;
+                else if (ctl.InternalSampleRate == 12000) currBandwidth = (int)OpusBandwidth.Mediumband;
+                else if (ctl.InternalSampleRate == 16000) currBandwidth = (int)OpusBandwidth.Wideband;
+            }
+            ctl.OpusCanSwitch = ctl.SwitchReady;
+            if (ctl.OpusCanSwitch)
+            {
+                redundancy = true;
+                celtToSilk = false;
+                _silkBwSwitch = true;
+            }
+        }
+
         _celt.End = EndBand(currBandwidth);
         _celt.StreamChannels = _streamChannels;
         _celt.Bitrate = -1;
-        _celt.Vbr = false;
-        _celt.DisablePrefilter = false;
-        _celt.ForceIntra = false;
-        _celt.Start = 0;
         int nbComprBytes;
-        if (useVbr)
+        if (_mode != ModeSilk)
         {
-            _celt.Vbr = true;
-            _celt.ConstrainedVbr = vbrConstraint;
-            _celt.Bitrate = bitrateBps;
-            nbComprBytes = maxDataBytes - 1;
+            _celt.Vbr = false;
+            _celt.DisablePrefilter = false;
+            _celt.ForceIntra = false;
+            if (_mode == ModeHybrid)
+            {
+                int len = (enc.Tell() + 7) >> 3;
+                if (redundancy) len += 3;
+                if (useVbr) nbComprBytes = len + bytesTarget - (ctl.BitRate * frameSize) / (8 * Fs);
+                else nbComprBytes = len > bytesTarget ? len : bytesTarget;
+            }
+            else if (useVbr)
+            {
+                _celt.Vbr = true;
+                _celt.ConstrainedVbr = vbrConstraint;
+                _celt.Bitrate = bitrateBps;
+                nbComprBytes = maxDataBytes - 1;
+            }
+            else nbComprBytes = bytesTarget;
         }
-        else nbComprBytes = bytesTarget;
+        else nbComprBytes = 0;
 
+        var tmpPrefill = _tmpPrefill;
+        bool needPrefill = _mode != ModeSilk && _mode != _prevMode && _prevMode > 0;
+        if (needPrefill)
+            for (int i = 0; i < ch * (Fs / 400); i++)
+                tmpPrefill[i] = _delayBuffer[(encoderBuffer - _delayCompensation - Fs / 400) * ch + i];
         for (int i = 0; i < ch * (encoderBuffer - (frameSize + delayCompensation)); i++)
             _delayBuffer[i] = _delayBuffer[i + ch * frameSize];
         for (int i = Math.Max(0, ch * (encoderBuffer - (frameSize + delayCompensation))); i < encoderBuffer * ch; i++)
             _delayBuffer[i] = pcmBuf[(frameSize + delayCompensation - encoderBuffer) * ch + i];
 
-        var enc = new RangeEncoder(body, maxDataBytes - 1);
-        int celtRet = 0;
-        if (enc.Tell() <= 8 * nbComprBytes)
+        if (_mode != ModeHybrid || _streamChannels == 1) ctl.StereoWidthQ14 = 1 << 14;
+        if (ch == 2 && (_hybridStereoWidthQ14 < (1 << 14) || ctl.StereoWidthQ14 < (1 << 14)))
         {
-            celtRet = _celt.Encode(pcmBuf.AsSpan(0, frameSize * ch), frameSize, body, nbComprBytes, ref enc, true);
-            if (celtRet < 0) return -1;
+            float g1 = (float)(_hybridStereoWidthQ14 * (1.0 / 16384));
+            float g2 = (float)(ctl.StereoWidthQ14 * (1.0 / 16384));
+            StereoFade(pcmBuf, g1, g2, CeltTables.Overlap, frameSize, ch);
+            _hybridStereoWidthQ14 = (short)ctl.StereoWidthQ14;
         }
-        data[0] = GenToc(ModeCelt, Fs / frameSize, currBandwidth, _streamChannels);
-        _rangeFinal = enc.Range;
+
+        int redundancyBytes = 0;
+        if (_mode != ModeCelt && enc.Tell() + 17 + 20 * (_mode == ModeHybrid ? 1 : 0) <= 8 * (maxDataBytes - 1))
+        {
+            // RFC 6716 section 4.5.1: redundancy flag (hybrid only), direction, and length (hybrid only).
+            if (_mode == ModeHybrid && (redundancy || enc.Tell() + 37 <= 8 * nbComprBytes))
+                enc.BitLogP(redundancy ? 1 : 0, 12);
+            if (redundancy)
+            {
+                enc.BitLogP(celtToSilk ? 1 : 0, 1);
+                int maxRedundancy = _mode == ModeHybrid
+                    ? (maxDataBytes - 1) - nbComprBytes - 1
+                    : (maxDataBytes - 1) - ((enc.Tell() + 7) >> 3);
+                redundancyBytes = Math.Min(maxRedundancy, bitrateBps / 1600);
+                redundancyBytes = Math.Min(257, Math.Max(2, redundancyBytes));
+                if (_mode == ModeHybrid) enc.EncodeUInt((uint)(redundancyBytes - 2), 256);
+            }
+        }
+        else redundancy = false;
+        if (!redundancy) _silkBwSwitch = false;
+
+        int startBand = _mode != ModeCelt ? 17 : 0;
+        if (_mode == ModeSilk)
+        {
+            ret = (enc.Tell() + 7) >> 3;
+            enc.Done();
+            nbComprBytes = ret;
+        }
+        else
+        {
+            nbComprBytes = Math.Min((maxDataBytes - 1) - redundancyBytes, nbComprBytes);
+            enc.Shrink(nbComprBytes);
+        }
+
+        uint redundantRng = 0;
+        RangeEncoder side = default;
+        if (redundancy && celtToSilk)
+        {
+            _celt.Start = 0;
+            _celt.Vbr = false;
+            int err = _celt.Encode(pcmBuf.AsSpan(0, (Fs / 200) * ch), Fs / 200, body.Slice(nbComprBytes, redundancyBytes), redundancyBytes, ref side, false);
+            if (err < 0) return -1;
+            redundantRng = _celt.FinalRange;
+            _celt.Reset();
+        }
+        _celt.Start = startBand;
+        if (_mode != ModeSilk)
+        {
+            if (_mode != _prevMode && _prevMode > 0)
+            {
+                _celt.Reset();
+                _celt.Encode(tmpPrefill.AsSpan(0, (Fs / 400) * ch), Fs / 400, _dummy2, 2, ref side, false);
+                _celt.DisablePrefilter = true;
+                _celt.ForceIntra = true;
+            }
+            if (enc.Tell() <= 8 * nbComprBytes)
+            {
+                ret = _celt.Encode(pcmBuf.AsSpan(0, frameSize * ch), frameSize, Span<byte>.Empty, nbComprBytes, ref enc, true);
+                if (ret < 0) return -1;
+            }
+        }
+        if (redundancy && !celtToSilk)
+        {
+            int n2 = Fs / 200, n4 = Fs / 400;
+            _celt.Reset();
+            _celt.Start = 0;
+            _celt.DisablePrefilter = true;
+            _celt.ForceIntra = true;
+            _celt.Encode(pcmBuf.AsSpan(ch * (frameSize - n2 - n4)), n4, _dummy2, 2, ref side, false);
+            int err = _celt.Encode(pcmBuf.AsSpan(ch * (frameSize - n2)), n2, body.Slice(nbComprBytes, redundancyBytes), redundancyBytes, ref side, false);
+            if (err < 0) return -1;
+            redundantRng = _celt.FinalRange;
+        }
+        data[0] = GenToc(_mode, Fs / frameSize, currBandwidth, _streamChannels);
+        _rangeFinal = enc.Range ^ redundantRng;
+        _prevMode = toCelt ? ModeCelt : _mode;
         _prevChannels = _streamChannels;
         _prevFramesize = frameSize;
         _first = false;
 
-        int result = celtRet;
         // In the unlikely case that the encoder busted its target, tell the decoder to conceal the frame.
         if (enc.Tell() > (maxDataBytes - 1) * 8)
         {
             data[1] = 0;
-            result = 1;
+            ret = 1;
             _rangeFinal = 0;
         }
-        result += 1;
+        else if (_mode == ModeSilk && !redundancy)
+        {
+            while (ret > 2 && data[ret] == 0) ret--;
+        }
+        int result = ret + 1 + redundancyBytes;
         if (selfDelimited)
         {
             int frameLen = result - 1;

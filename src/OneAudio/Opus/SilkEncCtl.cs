@@ -194,7 +194,7 @@ internal sealed partial class SilkEncState
                     break;
                 }
             }
-            if (LbrrEnabled) SnrDbQ7 = SMlaBB(SnrDbQ7, 12 - LbrrGainIncreases, -32); // -0.25 in Q7
+            if (LbrrEnabled) SnrDbQ7 = SMlaBB(SnrDbQ7, 12 - LbrrGainIncreases, -31); // SILK_FIX_CONST(-0.25, 7) truncates toward zero
         }
     }
 

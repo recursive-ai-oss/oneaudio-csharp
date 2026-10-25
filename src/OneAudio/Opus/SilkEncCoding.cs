@@ -6,7 +6,7 @@ namespace OneAudio.Opus;
 internal sealed partial class SilkEncState
 {
     private const int MaxPulses = 16;
-    private static readonly byte[] MaxPulsesTable = [8, 10, 12, 14];
+    private static readonly byte[] MaxPulsesTable = [8, 10, 12, 16];
 
     private static readonly byte[] PulsesPerBlockBitsQ5 =
     [

@@ -18,7 +18,7 @@ internal static class SilkNlsf
         Span<int> polyP = stackalloc int[MaxOrder / 2 + 1];
         Span<int> polyQ = stackalloc int[MaxOrder / 2 + 1];
         Span<int> a32 = stackalloc int[MaxOrder];
-        Span<int> scratch = stackalloc int[MaxOrder];
+        Span<int> scratch = stackalloc int[2 * MaxOrder];
         for (int k = 0; k < d; k++)
         {
             int fInt = nlsf[k] >> (15 - 7);

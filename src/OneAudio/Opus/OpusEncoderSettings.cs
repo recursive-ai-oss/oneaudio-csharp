@@ -105,4 +105,17 @@ public sealed record OpusEncoderSettings
 
     /// <summary>Expected packet loss in percent (0 to 100), which makes the encoder more robust. Default 0.</summary>
     public int PacketLossPercent { get; init; }
+
+    /// <summary>
+    /// Adds in-band forward error correction: low-rate SILK packets also carry a coarse copy of the previous frame, which a
+    /// decoder can use when that packet is lost. Costs bitrate and only has an effect when <see cref="PacketLossPercent"/> is above 0.
+    /// Default false.
+    /// </summary>
+    public bool InBandFec { get; init; }
+
+    /// <summary>
+    /// Discontinuous transmission: during silence the speech layer stops sending packets (a one-byte packet is returned instead)
+    /// and the decoder conceals. Pushes voice-like content to the SILK mode. Default false.
+    /// </summary>
+    public bool Dtx { get; init; }
 }
