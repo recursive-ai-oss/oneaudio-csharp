@@ -746,7 +746,12 @@ internal sealed class Mp3Layer3
             line = longLines;
             firstShort = 3;
             Array.Clear(spec, longLines, 576 - longLines);
-            AliasReduce(spec, h.SampleRate == 8000 && h.Version == MpegVersion.Mpeg25 ? 4 : 2);
+            // The ISO/IEC 11172-4 stream he_mode (frames 91 to 109: mixed blocks with a tone in the second long subband) matches
+            // its reference decode to one 16-bit step only when no butterfly runs between the long subbands of a mixed
+            // block; with the single 0/1 butterfly the error is up to 11 steps. So the loop stops one subband short of the
+            // long part (sb_amount - 1): nothing at the usual two long subbands, two boundaries for the four of 8 kHz MPEG-2.5
+            // (that last case has no reference stream to check against).
+            AliasReduce(spec, (h.SampleRate == 8000 && h.Version == MpegVersion.Mpeg25 ? 4 : 2) - 1);
         }
         else Array.Clear(spec);
         for (int sfb = firstShort; sfb < 13; sfb++)

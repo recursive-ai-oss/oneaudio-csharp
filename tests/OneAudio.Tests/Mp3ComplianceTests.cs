@@ -67,15 +67,6 @@ public class Mp3ComplianceTests
                       $"float vs ref rms={rmsF:E3} max={maxF:E3}; rounded-16 vs ref rms={rmsR:E3} max={maxR:E3} differing={mismatches} " +
                       $"(limits rms<{RmsLimit:E3} max<={MaxLimit:E3})";
         Mp3TestEnv.Report(line);
-        if (name == "he_mode")
-        {
-            // Known difference: in the frames that combine mixed blocks with joint stereo (frames 91 to 109) the reference PCM
-            // differs from this decoder, and from the libmpg123 player, by up to 11 steps of 16-bit while those two agree with
-            // each other to one step. Everything else in the stream, including the mixed blocks of si_block and the
-            // intensity frames with short blocks, meets the limits. The bound below pins the size of that difference.
-            Assert.True(maxR <= 12.0 / 32768, line);
-            return;
-        }
         Assert.True(rmsR < RmsLimit, line);
         Assert.True(maxR <= MaxLimit, line);
     }

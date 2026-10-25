@@ -84,8 +84,9 @@ public class Mp3OracleTests
         Mp3TestEnv.Report(line);
         Assert.Equal(theirs.Length, ours.Length);
         // he_mode switches between mono and stereo frames. At each switch mpg123 does not carry the filterbank memory over the
-        // way the reference decode does (frames 10 and 110 differ from the reference by thousands of 16-bit steps there;
-        // this decoder matches the reference at the switches), so only the report is kept for that stream.
+        // way the reference decode does (frames 10 and 110 differ from the reference by thousands of 16-bit steps there),
+        // and in its mixed-block frames 91 to 109 it applies an alias-reduction butterfly the reference decode does not
+        // (up to 11 steps). This decoder matches the reference on both counts, so only the report is kept for that stream.
         if (name == "he_mode") return;
         Assert.True(max < 1e-5, line);
         Assert.True(rms < 1e-6, line);
