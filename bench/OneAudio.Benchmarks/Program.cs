@@ -4,6 +4,8 @@ using OneAudio;
 using OneAudio.Benchmarks;
 
 if (args.Length > 0 && args[0] == "pitch-sweep") return PitchSweepProbe.Run();
+if (args.Length > 0 && args[0] == "flac-encode-probe") return FlacEncodeReport.Probe(args);
+if (args.Length > 0 && args[0] == "flac-encode-report") return FlacEncodeReport.Run(args);
 BenchmarkSwitcher.FromAssembly(typeof(ResampleBenchmarks).Assembly).Run(args);
 return 0;
 

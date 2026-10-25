@@ -108,6 +108,7 @@ if (VorbisSmoke.Run() != 0) return 1;
 if (EffectsSmoke.Run() != 0) return 1;
 if (Mp3Smoke.Run() != 0) return 1;
 if (FlacSmoke.Run() != 0) return 1;
+if (EncodeSmoke.Run() != 0) return 1;
 
 // Loudness: a -20 dBFS stereo tone must read about -20 LUFS, and the normalisation gain follows from it.
 {
