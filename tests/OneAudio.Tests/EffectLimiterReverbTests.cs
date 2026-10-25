@@ -354,7 +354,9 @@ public class EffectLimiterReverbTests
     {
         var m = new AudioMixer(new MixerOptions { SampleRate = Rate, Channels = 2, MaxBlockFrames = 256, MaxReverbs = 1 });
         Assert.True(m.SetBusReverb(1, new ReverbSettings { DecaySeconds = 0.5f, Wet = 1f, Dry = 0f }));
-        Assert.False(m.SetBusReverb(2, new ReverbSettings()));              // the only slot is taken
+        Assert.Equal(0, m.FreeReverbSlots);
+        var full = Assert.Throws<InvalidOperationException>(() => m.SetBusReverb(2, new ReverbSettings()));   // the only slot is taken
+        Assert.Contains("MaxReverbs", full.Message);
         Assert.True(m.SetBusReverb(1, new ReverbSettings { DecaySeconds = 0.5f, Wet = 1f, Dry = 0f }));   // retune is fine
         m.Play(new PlayParams(Tone(500, 2400)) { Bus = 1 });
         var o = new float[2 * 4800];

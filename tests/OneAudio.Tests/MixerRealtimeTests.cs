@@ -65,17 +65,18 @@ public class MixerRealtimeTests
         {
             SampleRate = Rate, Channels = outChannels, MaxVoices = 8, MaxBuses = 6, MaxBlockFrames = 256,
             ResamplerFactory = realConverters ? null : Factory, EventCapacity = 64,
-            MaxReverbs = 2, LimiterLookaheadMilliseconds = 5,
+            MaxReverbs = 2, LimiterLookaheadMilliseconds = 5, MaxBusMeters = 4,
         });
         var o = new float[outChannels * 480];
         var handles = new VoiceHandle[8];
         int hi = 0;
+        long meterReads = 0;
         var rng = new Random(42);
 
         void Control(int i)
         {
             var h = handles[rng.Next(8)];
-            switch (i % 26)
+            switch (i % 28)
             {
                 case 0: handles[hi++ & 7] = m.Play(new PlayParams(stereo) { Loop = true, Priority = i % 3, FadeInFrames = 32, Bus = i % 4 }); break;
                 case 1: handles[hi++ & 7] = m.Play(new PlayParams(surround) { Pan = (i % 5 - 2) / 2f, Bus = 1 }); break;
@@ -100,10 +101,21 @@ public class MixerRealtimeTests
                 case 20: m.SetBusFilter(i % 7 - 1, i % 3 == 0 ? FilterType.HighPass : FilterType.LowPass, 50 + (i * 37) % 15000, 0.3f + i % 11, i % 4 == 0 ? 0 : i % 4 * 200); break;
                 case 21: m.ClearBusFilter(i % 7 - 1, i % 2 == 0 ? FilterType.HighPass : FilterType.LowPass, i % 3 * 100); break;
                 case 22:
-                    m.SetBusReverb(i % 3 - 1, new ReverbSettings { DecaySeconds = 0.2f + i % 7, RoomSize = (i % 5) / 4f, Damping = (i % 3) / 2f, PreDelayMilliseconds = i % 4 * 20, Wet = 0.5f }, i % 2 * 300);
+                    // Three candidate buses compete for two slots: running out is an InvalidOperationException, which a game would avoid or handle.
+                    try { m.SetBusReverb(i % 3 - 1, new ReverbSettings { DecaySeconds = 0.2f + i % 7, RoomSize = (i % 5) / 4f, Damping = (i % 3) / 2f, PreDelayMilliseconds = i % 4 * 20, Wet = 0.5f }, i % 2 * 300); }
+                    catch (InvalidOperationException) { }
                     break;
                 case 23: m.ClearBusReverb(i % 3 - 1); break;
                 case 24: m.SetLimiter(i % 5 == 0 ? null : new LimiterSettings { CeilingDb = -(i % 12), ReleaseMilliseconds = 5 + i % 100 }); break;
+                case 26:
+                    // Seven candidate buses compete for four meters; toggling, resetting and reading happen between callbacks.
+                    try { if (i % 3 == 0) m.DisableBusMeter(i % 7 - 1); else m.EnableBusMeter(i % 7 - 1); }
+                    catch (InvalidOperationException) { }
+                    if (i % 11 == 0) m.ResetBusMeter(i % 5 - 1);
+                    break;
+                case 27:
+                    for (int bus = -1; bus < 6; bus++) if (m.TryGetBusLoudness(bus, out var snap)) meterReads += snap.FramesMeasured >= 0 ? 1 : 0;
+                    break;
                 case 25: if (i % 2 == 0) m.SetVoiceFilter(h, FilterType.LowPass, 300 + i % 5000, 1f + i % 4, i % 3 * 50); else m.ClearVoiceFilter(h, FilterType.LowPass, 10); break;
             }
         }
@@ -135,6 +147,7 @@ public class MixerRealtimeTests
         Console.WriteLine($"render allocation [{label}]: {allocated} bytes over 8000 callbacks, GCs during: {gcsAfter - gcs} (control calls included in the GC count), peak voices {m.ActiveVoices}");
         Console.WriteLine($"  control time {swC.ElapsedMilliseconds} ms, slowest render {maxTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency:F3} ms");
         Assert.Equal(0, allocated);
+        Assert.True(meterReads > 0);
         foreach (var x in o) Assert.True(float.IsFinite(x));
     }
 
@@ -216,7 +229,7 @@ public class MixerRealtimeTests
         var clip = Ramp(Rate, 2000, 1);
         var odd = Ramp(32000, 2000, 2);
         var surround = Ramp(Rate, 1500, 6);
-        var m = new AudioMixer(new MixerOptions { SampleRate = Rate, Channels = 2, MaxVoices = 16, MaxBuses = 6, CommandCapacity = 256, MaxReverbs = 3, LimiterLookaheadMilliseconds = 2 });
+        var m = new AudioMixer(new MixerOptions { SampleRate = Rate, Channels = 2, MaxVoices = 16, MaxBuses = 6, CommandCapacity = 256, MaxReverbs = 3, LimiterLookaheadMilliseconds = 2, MaxBusMeters = 3 });
         using var pump = new StreamingPump(intervalMilliseconds: 1);
         pump.Start();
         using var stop = new CancellationTokenSource();
@@ -230,7 +243,7 @@ public class MixerRealtimeTests
                 VoiceHandle last = default;
                 while (!stop.IsCancellationRequested)
                 {
-                    switch (rng.Next(17))
+                    switch (rng.Next(19))
                     {
                         case 0: last = m.Play(new PlayParams(clip) { Loop = true, Gain = 0.1f, Pan = (float)rng.NextDouble() * 2 - 1, Bus = rng.Next(6) }); break;
                         case 1: last = m.Play(new PlayParams(odd) { Gain = 0.1f, VariablePitch = true, Bus = rng.Next(6) }); break;
@@ -258,8 +271,28 @@ public class MixerRealtimeTests
                         case 11: m.SetMasterGain((float)rng.NextDouble()); break;
                         case 12: m.SetBusFilter(rng.Next(-1, 6), (FilterType)rng.Next(2), 20 + (float)rng.NextDouble() * 20000, 0.1f + (float)rng.NextDouble() * 20, rng.Next(2) * 300); break;
                         case 13: m.ClearBusFilter(rng.Next(-1, 6), (FilterType)rng.Next(2), rng.Next(2) * 50); break;
-                        case 14: m.SetBusReverb(rng.Next(-1, 6), new ReverbSettings { DecaySeconds = 0.1f + rng.Next(30) * 0.5f, RoomSize = (float)rng.NextDouble() }); break;
+                        case 14:
+                            try { m.SetBusReverb(rng.Next(-1, 6), new ReverbSettings { DecaySeconds = 0.1f + rng.Next(30) * 0.5f, RoomSize = (float)rng.NextDouble() }); }
+                            catch (InvalidOperationException) { }
+                            break;
                         case 15: m.ClearBusReverb(rng.Next(-1, 6)); m.SetLimiter(rng.Next(3) == 0 ? null : new LimiterSettings { CeilingDb = -rng.Next(20) }); break;
+                        case 17:
+                            try
+                            {
+                                int bus = rng.Next(-1, 6);
+                                switch (rng.Next(3))
+                                {
+                                    case 0: m.EnableBusMeter(bus); break;
+                                    case 1: m.DisableBusMeter(bus); break;
+                                    default: m.ResetBusMeter(bus); break;
+                                }
+                            }
+                            catch (InvalidOperationException) { }
+                            break;
+                        case 18:
+                            for (int bus = -1; bus < 6; bus++)
+                                if (m.TryGetBusLoudness(bus, out var snap)) MixerMeterTests.AssertConsistent(snap);
+                            break;
                         case 16: m.SetVoiceFilter(last, (FilterType)rng.Next(2), 100 + (float)rng.NextDouble() * 9000, 1f, rng.Next(2) * 20); m.ClearVoiceFilter(last, FilterType.HighPass, 0); break;
                     }
                     while (m.TryGetEvent(out _)) { }

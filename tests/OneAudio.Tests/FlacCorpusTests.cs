@@ -17,13 +17,13 @@ public class FlacCorpusTests
     public void Subset_IsBitExact_AndMd5Matches(string rel)
     {
         var path = FlacTestEnv.Path_(rel);
-        Assert.SkipUnless(FlacTestEnv.FlacBinary is not null, "reference flac binary not available (set ONEAUDIO_FLAC).");
+        // Without the reference binary the STREAMINFO MD5 of the decoded samples is the check.
         using var dec = (FlacDecoder)AudioDecoder.OpenFile(path, FlacTestEnv.Registry);
         Assert.True(dec.VerifyMd5(), "STREAMINFO MD5 mismatch");
         Assert.Equal(0, dec.PositionFrames);
         var (hash, frames) = FlacTestEnv.HashDecode(dec);
         if (dec.LengthFrames >= 0) Assert.Equal(dec.LengthFrames, frames);
-        Assert.Equal(FlacTestEnv.ReferenceHash(path), hash);
+        if (FlacTestEnv.FlacBinary is not null) Assert.Equal(FlacTestEnv.ReferenceHash(path), hash);
     }
 
     /// <summary>Per-file outcome the decoder promises for the uncommon files: decoded bit-exact, or rejected.</summary>
@@ -56,10 +56,10 @@ public class FlacCorpusTests
             Assert.Contains(why, ex.Message, StringComparison.Ordinal);
             return;
         }
-        Assert.SkipUnless(FlacTestEnv.FlacBinary is not null, "reference flac binary not available (set ONEAUDIO_FLAC).");
         using var dec = (FlacDecoder)AudioDecoder.OpenFile(path, FlacTestEnv.Registry);
         Assert.True(dec.VerifyMd5() ?? true);
-        Assert.Equal(FlacTestEnv.ReferenceHash(path), FlacTestEnv.HashDecode(dec).Hash);
+        var decoded = FlacTestEnv.HashDecode(dec).Hash;
+        if (FlacTestEnv.FlacBinary is not null) Assert.Equal(FlacTestEnv.ReferenceHash(path), decoded);
     }
 
     /// <summary>Every faulty file ends in a typed rejection (never another exception, never a hang or a silent decode).</summary>

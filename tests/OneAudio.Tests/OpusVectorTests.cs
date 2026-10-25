@@ -66,15 +66,23 @@ public class OpusVectorTests
     {
         var dir = VectorDir();
         var tool = Environment.GetEnvironmentVariable("OPUS_COMPARE");
-        if (dir is null || tool is null) return;
+        // With OPUS_KEEP set and no comparator, the decoded PCM is left in the temp directory for a comparator run elsewhere
+        // (used where the native opus_compare cannot run, such as under an emulator).
+        bool keepOnly = tool is null && Environment.GetEnvironmentVariable("OPUS_KEEP") is not null;
+        Assert.SkipUnless(dir is not null && (tool is not null || keepOnly), "RFC 8251 vectors not fetched or OPUS_COMPARE not set.");
 
         string name = $"testvector{number:00}";
         var pcm = DecodeBitFile(Path.Combine(dir, name + ".bit"), 2, mono, out int mismatches);
         var tmp = Path.Combine(Path.GetTempPath(), $"oneaudio-opus-{Environment.ProcessId}-{number}-{mono}.pcm");
         File.WriteAllBytes(tmp, pcm);
+        if (keepOnly)
+        {
+            Assert.Equal(0, mismatches);
+            return;
+        }
         try
         {
-            var psi = new ProcessStartInfo(tool) { RedirectStandardError = true, RedirectStandardOutput = true };
+            var psi = new ProcessStartInfo(tool!) { RedirectStandardError = true, RedirectStandardOutput = true };
             psi.ArgumentList.Add("-s");
             psi.ArgumentList.Add(Path.Combine(dir, name + (mono ? "m.dec" : ".dec")));
             psi.ArgumentList.Add(tmp);
