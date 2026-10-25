@@ -7,7 +7,21 @@
     <!-- Kernels/ is the only place unsafe code is allowed. It lives in this assembly, and AllowUnsafeBlocks
          stays false until a kernel needs it. When one does, the kernels move to their own internal assembly
          so the parsing code can never be compiled with unsafe enabled. -->
+    <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/recursive-ai-oss/oneaudio-csharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/recursive-ai-oss/oneaudio-csharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>audio;wav;flac;vorbis;opus;mp3;ogg;resampler;mixer;loudness;ebu-r128;nativeaot</PackageTags>
   </PropertyGroup>
+  <ItemGroup>
+    <None Include="PACKAGE.md" Pack="true" PackagePath="/" />
+    <None Include="icon.png" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE-MIT" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE-APACHE" Pack="true" PackagePath="/" />
+    <!-- Shipped when the repository has one; packing works without it. -->
+    <None Include="../../CHANGELOG.md" Pack="true" PackagePath="/" Condition="Exists('$(MSBuildThisFileDirectory)../../CHANGELOG.md')" />
+  </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="OneAudio.Tests" />
   </ItemGroup>
