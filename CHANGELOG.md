@@ -5,6 +5,11 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+### Added
+
+- `AudioMixer.TryEnableBusMeter(bus)`: enables a bus meter without throwing when no meter is free (or the mixer has none); `FreeBusMeters`
+  tells "no slot" from "queue full" after a false. `AudioMixer.IsBusMetered(bus)` reports whether a bus currently holds a meter.
+
 ## [0.1.0-alpha.3] - 2026-10-24
 
 ### Added
