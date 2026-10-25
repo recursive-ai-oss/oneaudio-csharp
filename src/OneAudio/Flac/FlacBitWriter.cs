@@ -38,11 +38,7 @@ internal struct FlacBitWriter
         if (_bits >= 32)
         {
             _bits -= 32;
-            uint w = (uint)(_acc >> _bits);
-            _buf[_pos] = (byte)(w >> 24);
-            _buf[_pos + 1] = (byte)(w >> 16);
-            _buf[_pos + 2] = (byte)(w >> 8);
-            _buf[_pos + 3] = (byte)w;
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(_buf.AsSpan(_pos), (uint)(_acc >> _bits));
             _pos += 4;
         }
     }

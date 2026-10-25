@@ -683,9 +683,13 @@ internal sealed class FlacFrameEncoder
             PartitionCost(sum, cnt, orBits, out int kEst, out _);
             long bestC = long.MaxValue;
             int bestK = 0;
-            for (int kk = Math.Max(0, kEst - 1); kk <= Math.Min(30, kEst + 1); kk++)
+            int k0 = Math.Min(Math.Max(0, kEst - 1), 29);
+            FlacEncKernels.SumShifted3(part, k0, out ulong u0, out ulong u1, out ulong u2);
+            for (int t = 0; t < 3; t++)
             {
-                long c = (long)cnt * (kk + 1) + (long)FlacEncKernels.SumShifted(part, kk);
+                int kk = k0 + t;
+                if (kk > 30) break; // the parameter field stops at 30 (31 is the escape code of the wide form)
+                long c = (long)cnt * (kk + 1) + (long)(t == 0 ? u0 : t == 1 ? u1 : u2);
                 if (c < bestC) { bestC = c; bestK = kk; }
             }
             int w = RawWidth(sum, orBits);

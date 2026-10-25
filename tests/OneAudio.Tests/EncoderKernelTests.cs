@@ -116,8 +116,14 @@ public class EncoderKernelTests
                 FlacEncKernels.FoldedStatsScalar(r, out ulong s0, out uint o0);
                 FlacEncKernels.FoldedStats(r, out ulong s1, out uint o1);
                 Assert.Equal((s0, o0), (s1, o1));
-                foreach (int k in new[] { 0, 1, 7, 15, 30 })
+                foreach (int k in new[] { 0, 1, 7, 15, 29 })
+                {
                     Assert.Equal(FlacEncKernels.SumShiftedScalar(r, k), FlacEncKernels.SumShifted(r, k));
+                    FlacEncKernels.SumShifted3Scalar(r, k, out ulong e0, out ulong e1, out ulong e2);
+                    FlacEncKernels.SumShifted3(r, k, out ulong b0, out ulong b1, out ulong b2);
+                    Assert.Equal((e0, e1, e2), (b0, b1, b2));
+                    Assert.Equal((FlacEncKernels.SumShiftedScalar(r, k), FlacEncKernels.SumShiftedScalar(r, k + 1), FlacEncKernels.SumShiftedScalar(r, k + 2)), (e0, e1, e2));
+                }
             }
         // A run of -1 has OR 0 but is not all zeros: the sum tells them apart.
         FlacEncKernels.FoldedStats([-1, -1, -1], out ulong sum, out uint or);

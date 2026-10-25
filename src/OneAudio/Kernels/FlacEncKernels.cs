@@ -264,6 +264,52 @@ internal static class FlacEncKernels
         return Vector256.Sum(acc) + SumShiftedScalar(residual[i..], k);
     }
 
+    /// <summary>
+    /// <see cref="SumShifted"/> for the three shifts <paramref name="k"/>, <paramref name="k"/> + 1 and <paramref name="k"/> + 2 in one pass
+    /// (<paramref name="k"/> + 2 must be at most 31): the sizes of a Rice code with the three neighbouring parameters.
+    /// </summary>
+    public static void SumShifted3(ReadOnlySpan<int> residual, int k, out ulong s0, out ulong s1, out ulong s2)
+    {
+        if (Vector256.IsHardwareAccelerated && residual.Length >= 8) SumShifted3_256(residual, k, out s0, out s1, out s2);
+        else SumShifted3Scalar(residual, k, out s0, out s1, out s2);
+    }
+
+    /// <summary>The reference loop.</summary>
+    public static void SumShifted3Scalar(ReadOnlySpan<int> residual, int k, out ulong s0, out ulong s1, out ulong s2)
+    {
+        ulong a = 0, b = 0, c = 0;
+        foreach (int r in residual)
+        {
+            uint u = (uint)((r << 1) ^ (r >> 31));
+            a += u >> k;
+            b += u >> (k + 1);
+            c += u >> (k + 2);
+        }
+        s0 = a; s1 = b; s2 = c;
+    }
+
+    private static void SumShifted3_256(ReadOnlySpan<int> residual, int k, out ulong s0, out ulong s1, out ulong s2)
+    {
+        ref int rr = ref MemoryMarshal.GetReference(residual);
+        Vector256<ulong> a = default, b = default, c = default;
+        int i = 0;
+        for (; i + 8 <= residual.Length; i += 8)
+        {
+            var v = Vector256.LoadUnsafe(ref rr, (nuint)i);
+            var u = ((v << 1) ^ Vector256.ShiftRightArithmetic(v, 31)).AsUInt32();
+            var u0 = Vector256.ShiftRightLogical(u, k);
+            var u1 = Vector256.ShiftRightLogical(u0, 1);
+            var u2 = Vector256.ShiftRightLogical(u0, 2);
+            a += Vector256.WidenLower(u0) + Vector256.WidenUpper(u0);
+            b += Vector256.WidenLower(u1) + Vector256.WidenUpper(u1);
+            c += Vector256.WidenLower(u2) + Vector256.WidenUpper(u2);
+        }
+        SumShifted3Scalar(residual[i..], k, out ulong ta, out ulong tb, out ulong tc);
+        s0 = Vector256.Sum(a) + ta;
+        s1 = Vector256.Sum(b) + tb;
+        s2 = Vector256.Sum(c) + tc;
+    }
+
     // ---- fixed-predictor ranking and windowing ---------------------------------------------------------------------
 
     /// <summary>
