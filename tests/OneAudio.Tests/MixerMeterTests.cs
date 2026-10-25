@@ -252,6 +252,66 @@ public class MixerMeterTests
     }
 
     [Fact]
+    public void TryEnable_SlotsExhausted_ReturnsFalseWithoutThrowingOrDropping()
+    {
+        var m = new AudioMixer(Options(meters: 1));
+        Assert.True(m.TryEnableBusMeter(0));
+        Assert.True(m.TryEnableBusMeter(0));                       // already metered: true, no slot needed
+        Assert.Equal(0, m.FreeBusMeters);
+        long dropped = m.DroppedCommands;
+        Assert.False(m.TryEnableBusMeter(1));
+        Assert.False(m.TryEnableBusMeter(AudioMixer.MasterBus));
+        Assert.Equal(dropped, m.DroppedCommands);
+        Assert.False(m.IsBusMetered(1));
+        Assert.True(m.DisableBusMeter(0));
+        Assert.True(m.TryEnableBusMeter(1));
+        Assert.True(m.IsBusMetered(1));
+    }
+
+    [Fact]
+    public void TryEnable_ZeroMeters_ReturnsFalse()
+    {
+        var m = new AudioMixer(Options(meters: 0));
+        Assert.False(m.TryEnableBusMeter(0));
+        Assert.False(m.IsBusMetered(0));
+        Assert.Equal(0, m.FreeBusMeters);
+    }
+
+    [Fact]
+    public void TryEnable_FullQueue_ReturnsFalseWithFreeSlotAndCountsDrop()
+    {
+        var m = new AudioMixer(Options(meters: 2));
+        while (m.SetMasterGain(0.5f)) { }
+        long dropped = m.DroppedCommands;
+        Assert.False(m.TryEnableBusMeter(0));
+        Assert.Equal(dropped + 1, m.DroppedCommands);
+        Assert.Equal(2, m.FreeBusMeters);                          // free slot + false = queue was full
+        Assert.False(m.IsBusMetered(0));
+        m.Render(new float[2 * 64]);
+        Assert.True(m.TryEnableBusMeter(0));
+        Assert.True(m.IsBusMetered(0));
+    }
+
+    [Fact]
+    public void IsBusMetered_FollowsEnableDisable_AndChecksRange()
+    {
+        var m = new AudioMixer(Options(meters: 2));
+        Assert.False(m.IsBusMetered(2));
+        Assert.False(m.IsBusMetered(AudioMixer.MasterBus));
+        Assert.True(m.EnableBusMeter(2));
+        Assert.True(m.EnableBusMeter(AudioMixer.MasterBus));
+        Assert.True(m.IsBusMetered(2));
+        Assert.True(m.IsBusMetered(AudioMixer.MasterBus));
+        Assert.True(m.DisableBusMeter(2));
+        Assert.False(m.IsBusMetered(2));
+        Assert.True(m.IsBusMetered(AudioMixer.MasterBus));
+        Assert.Throws<ArgumentOutOfRangeException>(() => m.IsBusMetered(4));
+        Assert.Throws<ArgumentOutOfRangeException>(() => m.TryEnableBusMeter(-2));
+        Assert.True(m.EnableBusMeter(0));
+        Assert.Throws<InvalidOperationException>(() => m.EnableBusMeter(1));   // EnableBusMeter keeps throwing
+    }
+
+    [Fact]
     public void SeqLock_NeverShowsATornValue()
     {
         var slot = new SeqLockSlot<Quad>();

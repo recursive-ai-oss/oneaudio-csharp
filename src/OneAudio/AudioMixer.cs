@@ -967,6 +967,40 @@ public sealed partial class AudioMixer
         }
     }
 
+    /// <summary>
+    /// Like <see cref="EnableBusMeter"/>, but never throws when no meter is free. Use it when the number of metered buses is up to the player
+    /// or a configuration, not the program.
+    /// </summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
+    /// <returns>
+    /// True when the bus is metered (queued now, or already metered). False, with nothing changed, when the bus is not metered and either no meter
+    /// is free (including a mixer created with <see cref="MixerOptions.MaxBusMeters"/> 0) or the command queue was full. To tell the two apart after a
+    /// false, check <see cref="FreeBusMeters"/>: 0 means no slot, more than 0 means the queue was full (the command was counted in
+    /// <see cref="DroppedCommands"/> and a retry after the next render pass can succeed). A "no slot" failure is not a dropped command.
+    /// </returns>
+    /// <exception cref="ArgumentOutOfRangeException">The bus is out of range.</exception>
+    public bool TryEnableBusMeter(int bus)
+    {
+        CheckEffectBus(bus);
+        lock (_controlLock)
+        {
+            int slot = _ctlMeterSlot[bus + 1];
+            if (slot >= 0) return true;
+            slot = Array.IndexOf(_ctlMeterBusy, false);
+            if (slot < 0) return false;
+            return QueueMeterStart(bus, slot);
+        }
+    }
+
+    /// <summary>Whether a meter is currently assigned to the bus by <see cref="EnableBusMeter"/> or <see cref="TryEnableBusMeter"/> and not yet disabled. Control-side state: it flips when the command is queued, before the next render pass, so <see cref="TryGetBusLoudness"/> may still return an empty reading for a moment.</summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The bus is out of range.</exception>
+    public bool IsBusMetered(int bus)
+    {
+        CheckEffectBus(bus);
+        lock (_controlLock) return _ctlMeterSlot[bus + 1] >= 0;
+    }
+
     /// <summary>Stops measuring a bus and frees its meter for another bus. <see cref="TryGetBusLoudness"/> returns false for it at once. A bus that is not metered is ignored.</summary>
     /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
     /// <returns>True when done. False if the command queue was full (the meter keeps running).</returns>
