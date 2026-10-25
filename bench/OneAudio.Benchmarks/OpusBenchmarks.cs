@@ -16,6 +16,7 @@ public class OpusDecodeBenchmarks
     private float[] _out = [];
     private OpusDecoder _ours = null!;
     private IOpusDecoder _concentus = null!;
+    private string _bitPath = "";
 
     [Params("testvector01", "testvector04", "testvector05")]
     public string Vector { get; set; } = "";
@@ -27,7 +28,8 @@ public class OpusDecodeBenchmarks
     public void Setup()
     {
         var root = Environment.GetEnvironmentVariable("ONEAUDIO_CORPUS") ?? throw new InvalidOperationException("Set ONEAUDIO_CORPUS.");
-        var bit = File.ReadAllBytes(Path.Combine(root, "opus-rfc8251", "opus_newvectors", Vector + ".bit"));
+        _bitPath = Path.Combine(root, "opus-rfc8251", "opus_newvectors", Vector + ".bit");
+        var bit = File.ReadAllBytes(_bitPath);
         int pos = 0;
         long frames = 0;
         while (pos + 8 <= bit.Length)
@@ -62,6 +64,23 @@ public class OpusDecodeBenchmarks
         long n = 0;
         foreach (var p in _packets) n += _concentus.Decode(p, _out, 5760, false);
         return n;
+    }
+
+    /// <summary>The RFC 6716 reference decoder (opus_demo -d) as a child process: includes process start and file I/O. Set OPUS_DEMO to its path.</summary>
+    [Benchmark]
+    public int ReferenceDemoProcess()
+    {
+        var demo = Environment.GetEnvironmentVariable("OPUS_DEMO");
+        if (string.IsNullOrEmpty(demo)) return 0;
+        var psi = new System.Diagnostics.ProcessStartInfo(demo) { UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
+        foreach (var a in new[] { "-d", "48000", "2", _bitPath, Path.Combine(Path.GetTempPath(), "oneaudio-opusdec-" + Environment.ProcessId + ".pcm") })
+            psi.ArgumentList.Add(a);
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        p.StandardOutput.ReadToEnd();
+        p.StandardError.ReadToEnd();
+        p.WaitForExit();
+        File.Delete(psi.ArgumentList[4]);
+        return p.ExitCode;
     }
 }
 
