@@ -29,6 +29,9 @@ public readonly record struct OggLinkInfo(uint SerialNumber, CodecId Codec, long
 /// in-band (<c>IsHeader</c> true), so a codec that sees a new header sequence knows a new stream begins. On a seekable
 /// stream the links are found when the source is opened (see <see cref="GetLink"/>); on a non-seekable stream they are
 /// discovered as they are read. A link that uses a different codec from the first one ends the stream.
+/// On a seekable stream the link list found at open is authoritative: <see cref="CurrentLink"/> always indexes it, and
+/// a stray page or stream that starts no listed link is skipped like any foreign page. Link positions are granule
+/// positions of the link's last page, so for Opus a link's length still includes its pre-skip; the codec subtracts it.
 /// </para>
 /// <para>
 /// <b>Seeking.</b> <see cref="SeekToFrame"/> works on the file-wide frame axis. It finds the last page whose granule
@@ -416,8 +419,9 @@ public sealed class OggPacketSource : IPacketSource
                 else if (_dataSeen)
                 {
                     // Same serial number reused for a new link: treat it as one.
-                    if (!NewLinkFromBos(pg)) return false;
-                    return true;
+                    if (NewLinkFromBos(pg)) return true;
+                    if (_ended) return false;
+                    continue;
                 }
                 LoadPageState(pg);
                 return true;
@@ -435,18 +439,41 @@ public sealed class OggPacketSource : IPacketSource
     {
         var codec = DetectCodec(FirstPacketOf(_reader.LastPageBytes));
         if (codec is null) return false;
-        if (codec.Value != _codec) { _ended = true; return false; }
-        int idx = _curLink + 1;
-        if (!_seekable)
+        int idx;
+        if (_seekable)
         {
+            // The link table built at open is the single source of truth: a BOS page that starts no listed link
+            // (a different codec, which ended the scan, or a stray stream) is skipped like any foreign page, so
+            // CurrentLink always indexes the table.
+            idx = IndexOfLinkAt(pg.Offset);
+            if (idx < 0) return false;
+        }
+        else
+        {
+            if (codec.Value != _codec) { _ended = true; return false; }
+            idx = _curLink + 1;
             _limits.CheckContainerElements(idx + 1);
             if (idx >= _links.Count) _links.Add(new Link { Serial = pg.Serial, Codec = codec.Value, StartOffset = pg.Offset });
         }
-        BeginLink(pg.Serial, Math.Min(idx, _links.Count - 1));
+        BeginLink(pg.Serial, idx);
         _haveSeq = false;
         LoadPageState(pg);
         _dataSeen = false;
         return true;
+    }
+
+    /// <summary>The index of the link whose first page is at <paramref name="offset"/>, or -1.</summary>
+    private int IndexOfLinkAt(long offset)
+    {
+        int lo = 0, hi = _links.Count - 1;
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) >>> 1;
+            long o = _links[mid].StartOffset;
+            if (o == offset) return mid;
+            if (o < offset) lo = mid + 1; else hi = mid - 1;
+        }
+        return -1;
     }
 
     private void Append(ReadOnlySpan<byte> piece)
@@ -510,7 +537,7 @@ public sealed class OggPacketSource : IPacketSource
         while (_reader.TryReadPage(false, out var pg))
         {
             anyPage = true;
-            if (pg.Serial != first.Serial) { single = false; break; }
+            if (pg.Serial != first.Serial || (pg.IsBos && pg.Offset != first.StartOffset)) { single = false; break; }
             if (pg.Granule >= 0) lastGranule = pg.Granule;
         }
         if (single && anyPage)
