@@ -2,7 +2,7 @@
 # Downloads third-party test material into a cache directory outside the repository and verifies SHA-256.
 # Nothing fetched here is ever committed. Usage: tools/fetch-corpus.sh [cache-dir] [entry-name ...]
 # The cache directory defaults to $ONEAUDIO_CORPUS, then ../.oneaudio-corpus next to the checkout.
-# Each entry is: name|url|sha256|archive-type (tgz, zip or raw). Add new corpora as new lines.
+# Each entry is: name|url|sha256|archive-type (tgz, tgz1, zip or raw). Add new corpora as new lines.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,6 +11,8 @@ shift || true
 wanted=("$@")
 
 ENTRIES=(
+  # IETF CELLAR FLAC decoder test files (CC0), pinned by commit; tgz1 strips the archive's top directory.
+  "flac-cellar|https://github.com/ietf-wg-cellar/flac-test-files/archive/aa7b0c6cf32994c106ae517a08134c28a96ff5b2.tar.gz|36de2310155b4084011fbd56f24603dfef91a26c5433e3f92bd21995b45089c3|tgz1"
   "opus-rfc8251|https://opus-codec.org/static/testvectors/opus_testvectors-rfc8251.tar.gz|6b26a22f9ba87b2b836906a9bb7afec5f8e54d49553b1200382520ee6fedfa55|tgz"
   # Xiph Vorbis test vectors, one directory per file under the cache.
   "vorbis-xiph-1.0.1-test|https://people.xiph.org/~xiphmont/test-vectors/vorbis/1.0.1-test.ogg|8c9423e00826d6d2457d78c09d6e2a94bcdf9216af796bb22a4c4f450c2e72bb|raw"
@@ -42,6 +44,29 @@ ENTRIES=(
   "vorbis-xiph-test-short2|https://people.xiph.org/~xiphmont/test-vectors/vorbis/test-short2.ogg|6bd3f59e0fa77904edd35c73dadd6558e2a36d78c9d7bc5db223862bf092fcc2|raw"
   "vorbis-xiph-test-short|https://people.xiph.org/~xiphmont/test-vectors/vorbis/test-short.ogg|183510552403021fb90ce43796fcc88e16c8bb4ae5d0d72a316b8e51afc395fa|raw"
   "vorbis-xiph-unused-mode-test|https://people.xiph.org/~xiphmont/test-vectors/vorbis/unused-mode-test.ogg|e27ae6fc2f7c0037c28328801c46d966abcee3050e3ebd40bf097f7986f50f94|raw"
+  # ISO/IEC 11172-4 Layer III compliance streams and their reference decodes, as mirrored by the FFmpeg FATE sample suite (data files only).
+  "mp3-iso-compl-bit|https://fate-suite.ffmpeg.org/mp3-conformance/compl.bit|3b93f3675821a5af4826abcff7097fa2e42efcc46154e02c992995f7e31dbc8e|raw"
+  "mp3-iso-compl-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/compl.pcm|b33610eba44b3c1c0eb2dbc90bd55aba8c57e82c71b133266780d7182e2d994e|raw"
+  "mp3-iso-he_32khz-bit|https://fate-suite.ffmpeg.org/mp3-conformance/he_32khz.bit|965065cdcac3f45a61a9f54b4f94d59d0334f4b5cb74840a5aec7d405e2e050f|raw"
+  "mp3-iso-he_32khz-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/he_32khz.pcm|61c5a85e3057905e47402bb85b36fadeba23be9a04b8090e42670eab621acf08|raw"
+  "mp3-iso-he_44khz-bit|https://fate-suite.ffmpeg.org/mp3-conformance/he_44khz.bit|a64212281a8896d90e00f06c9b21f2c8f21ef9cb7367cae692a92ea421984441|raw"
+  "mp3-iso-he_44khz-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/he_44khz.pcm|fa9a4f4ab1e4dd8b2d08211d8c20a35c08237a0615172e8572d4b43645a9db2c|raw"
+  "mp3-iso-he_48khz-bit|https://fate-suite.ffmpeg.org/mp3-conformance/he_48khz.bit|dd0383075710570648b8961f3cd0ce692f07a679b265fc4997e50883b3958299|raw"
+  "mp3-iso-he_48khz-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/he_48khz.pcm|61c5a85e3057905e47402bb85b36fadeba23be9a04b8090e42670eab621acf08|raw"
+  "mp3-iso-he_free-bit|https://fate-suite.ffmpeg.org/mp3-conformance/he_free.bit|b55afc2a21492c4b3035d423f36fe87560ef34f65eb997da60af9b01f300362c|raw"
+  "mp3-iso-he_free-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/he_free.pcm|9e89d9481c68261e070e575174c85739b630553ddc9f7feaf1c61605fb15b3d2|raw"
+  "mp3-iso-he_mode-bit|https://fate-suite.ffmpeg.org/mp3-conformance/he_mode.bit|fb90396d9bb13311be35284d061e19196830d213d823e05297b18172c88d90ce|raw"
+  "mp3-iso-he_mode-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/he_mode.pcm|524abbe4b47988df2ecd9a2943532b9528cf3732a0376bafd14fea82967c34e5|raw"
+  "mp3-iso-hecommon-bit|https://fate-suite.ffmpeg.org/mp3-conformance/hecommon.bit|21999b77716aeba047c7f55c2c1ce17b54c780b6dc007912f251b7ea189676ef|raw"
+  "mp3-iso-hecommon-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/hecommon.pcm|5af4952d4451dc977b1344f836975e7545a66e38425de1764f3c28994cc38397|raw"
+  "mp3-iso-si-bit|https://fate-suite.ffmpeg.org/mp3-conformance/si.bit|4f3382de1d9265013d42249ff108023d4a90ecf3c0136489d199243a90a5d0f9|raw"
+  "mp3-iso-si-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/si.pcm|331c1e57fd6161ee63eac62650337d5f73cbf70dcdd76e50a11acb8016d8669d|raw"
+  "mp3-iso-si_block-bit|https://fate-suite.ffmpeg.org/mp3-conformance/si_block.bit|1d12956840638bf6b81164fc510c3e8269eeb038a51dc4548469e21a71e52b69|raw"
+  "mp3-iso-si_block-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/si_block.pcm|7ed181c7dad40e7033d73303131345ac57b914fab9eb1ae8c00a263aa9b0b7cb|raw"
+  "mp3-iso-si_huff-bit|https://fate-suite.ffmpeg.org/mp3-conformance/si_huff.bit|fda6d8a7d4e1df3cb17d3560b57013ef98abbf9c60d940455c2e3ebf63eae0ef|raw"
+  "mp3-iso-si_huff-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/si_huff.pcm|468cd5d833fa3e017300128d3a80126412e6d77bdbdcca9e97abace6752cc0be|raw"
+  "mp3-iso-sin1k0db-bit|https://fate-suite.ffmpeg.org/mp3-conformance/sin1k0db.bit|64775e23c29aa84e27f68777460f88e0717af2ed64e732d287a20c5a92c9fa3e|raw"
+  "mp3-iso-sin1k0db-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/sin1k0db.pcm|4a31caa4ec395b4f4c8efbb1b7fe739f7390a83b78320d078ef53bcb84939e63|raw"
   # EBU loudness test set v05 (Tech 3341 / 3342 minimum-requirement signals). The EBU site refuses some networks (HTTP 403 from its CDN),
   # so this pins the Internet Archive's copy of https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip; the SHA-256 is that of the EBU file.
   "ebu-loudness-v05|https://web.archive.org/web/20170331172519id_/https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip|9cc500b4df83f7c21855c74dce795ef5209a752bf884253ae57d0ce512efb062|zip"
@@ -59,6 +84,7 @@ for entry in "${ENTRIES[@]}"; do
   rm -rf "$dest"; mkdir -p "$dest"
   case "$kind" in
     tgz) tar -xzf "$file" -C "$dest" ;;
+    tgz1) tar -xzf "$file" -C "$dest" --strip-components=1 ;;
     zip) unzip -q "$file" -d "$dest" ;;
     raw) cp "$file" "$dest/" ;;
     *) echo "unknown archive type $kind" >&2; exit 1 ;;

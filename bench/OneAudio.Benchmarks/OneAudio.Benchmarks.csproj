@@ -11,6 +11,9 @@
     <PackageReference Include="NAudio.Core" Version="2.2.1" />
     <PackageReference Include="NVorbis" Version="0.10.5" />
     <PackageReference Include="Concentus" Version="2.2.2" />
+    <PackageReference Include="NLayer" Version="1.16.0" />
+    <PackageReference Include="PureFlac" Version="1.0.0" />
+    <PackageReference Include="BunLabs.NAudio.Flac" Version="2.0.1" />
     <PackageReference Include="R128Net" Version="1.1.2" />
   </ItemGroup>
   <ItemGroup>

@@ -13,6 +13,10 @@
     <Compile Include="../OneAudio.Tests/VorbisStreamBuilder.cs" Link="Shared/VorbisStreamBuilder.cs" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="../../testdata/flac/stereo16_midside_small.flac" LogicalName="smoke.flac" />
+    <EmbeddedResource Include="../../testdata/flac/ogg_stereo16.oga" LogicalName="smoke.oga" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../../src/OneAudio/OneAudio.csproj" />
   </ItemGroup>
 </Project>
