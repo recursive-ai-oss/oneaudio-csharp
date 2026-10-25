@@ -132,6 +132,49 @@ public class OpusEncoderTests
         }
     }
 
+    /// <summary>Odd settings, tiny output buffers and non-finite or full-scale samples never throw or write past the buffer, and what comes out decodes.</summary>
+    [Fact]
+    public void ExtremeInputsAndBufferSizesAreHandled()
+    {
+        var r = new Random(77);
+        var sizes = new[] { 120, 240, 480, 960, 1920, 2880 };
+        var apps = new[] { OpusApplication.Audio, OpusApplication.Voip, OpusApplication.RestrictedLowDelay };
+        for (int iter = 0; iter < 400; iter++)
+        {
+            int ch = r.Next(1, 3);
+            var enc = new OpusEncoder(new OpusEncoderSettings
+            {
+                Channels = ch, Application = apps[r.Next(3)], BitrateBps = r.Next(500, 300000),
+                BitrateMode = (OpusBitrateMode)r.Next(3), Complexity = r.Next(0, 11),
+                InBandFec = r.Next(2) == 0, PacketLossPercent = r.Next(0, 40), Dtx = r.Next(3) == 0,
+            });
+            var dec = new OpusDecoder(48000, ch);
+            var pcmOut = new float[5760 * ch];
+            for (int p = 0; p < 6; p++)
+            {
+                int fs = sizes[r.Next(sizes.Length)];
+                var pcm = new float[fs * ch];
+                int kind = r.Next(5);
+                for (int i = 0; i < pcm.Length; i++)
+                    pcm[i] = kind switch
+                    {
+                        0 => float.NaN,
+                        1 => r.Next(2) == 0 ? float.PositiveInfinity : float.NegativeInfinity,
+                        2 => r.Next(2) == 0 ? 1e30f : -1e30f,
+                        3 => (r.Next(2) == 0 ? 1f : -1f),
+                        _ => (float)(r.NextDouble() * 2 - 1),
+                    };
+                int size = r.Next(2, 1600);
+                var buffer = new byte[size + 4];
+                Array.Fill(buffer, (byte)0xA5);
+                int n = enc.Encode(pcm, fs, buffer.AsSpan(0, size));
+                Assert.InRange(n, 1, size);
+                for (int i = size; i < buffer.Length; i++) Assert.Equal(0xA5, buffer[i]);
+                if (n > 1) dec.Decode(buffer.AsSpan(0, n), pcmOut);
+            }
+        }
+    }
+
     [Fact]
     public void IdenticalInputGivesIdenticalBytes()
     {

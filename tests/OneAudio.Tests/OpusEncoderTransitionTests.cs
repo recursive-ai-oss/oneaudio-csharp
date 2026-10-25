@@ -208,4 +208,96 @@ public class OpusEncoderTransitionTests
             if (Directory.Exists(work)) Directory.Delete(work, true);
         }
     }
+
+    /// <summary>
+    /// Randomly drawn configurations (seeded, so reproducible): channels, signal, frame size, application, complexity, rate mode,
+    /// forced bandwidth, FEC and loss, DTX, force-mono and bitrate sweeps, 6 s each.
+    /// </summary>
+    public static TheoryData<int> Seeds()
+    {
+        var d = new TheoryData<int>();
+        for (int i = 0; i < 80; i++) d.Add(i);
+        return d;
+    }
+
+    [Theory]
+    [MemberData(nameof(Seeds))]
+    public void MatchesReferenceOnRandomConfigurations(int seed)
+    {
+        var r = new Random(1000 + seed);
+        int channels = r.Next(1, 3);
+        int signal = r.Next(0, 3);
+        int ms = new[] { 10, 20, 20, 20, 40, 60 }[r.Next(6)];
+        string app = r.Next(8) == 0 ? "restricted-lowdelay" : r.Next(3) == 0 ? "voip" : "audio";
+        int complexity = r.Next(0, 11);
+        int rateMode = r.Next(0, 3);
+        int bandwidth = r.Next(3) == 0 ? r.Next(1, 6) : 0;
+        bool fec = r.Next(3) == 0, dtx = r.Next(4) == 0, mono = channels == 2 && r.Next(5) == 0;
+        int bitrate = r.Next(6000, 90000);
+        int sweep = r.Next(3) == 0 ? 0 : r.Next(-300, 400);
+        int sweepMax = sweep > 0 && r.Next(2) == 0 ? bitrate + r.Next(5000, 60000) : 0;
+        if (app == "restricted-lowdelay") { fec = false; dtx = false; }
+
+        var demo = fec ? OpusEncoderSupport.DemoLossPath() : OpusEncoderSupport.DemoPath();
+        if (demo is null) return;
+        int frameSize = ms * 48;
+        int frames = 6 * 48000 / frameSize;
+        var pcm = signal == 0 ? OpusEncoderSupport.MakeSignal(channels, frames * frameSize, seed) : OpusEncoderSupport.MakeSpeechLike(channels, frames * frameSize, seed);
+        if (signal == 2)
+            Array.Clear(pcm, 2 * 48000 * channels, 96000 * channels);
+        var work = Path.Combine(Path.GetTempPath(), "oneaudio-enc-" + Guid.NewGuid().ToString("N"));
+        string config = $"seed {seed}: {channels} ch, signal {signal}, {ms} ms, {app}, complexity {complexity}, rate mode {rateMode}, bandwidth {bandwidth}, fec {fec}, dtx {dtx}, mono {mono}, {bitrate} bps, sweep {sweep}..{sweepMax}";
+        try
+        {
+            var opts = new List<string> { "-framesize", ms.ToString(), "-complexity", complexity.ToString() };
+            if (mono) opts.Add("-forcemono");
+            if (fec) { opts.Add("-inbandfec"); opts.Add("-loss"); opts.Add("15"); }
+            if (dtx) opts.Add("-dtx");
+            if (rateMode == 1) opts.Add("-cvbr");
+            if (rateMode == 2) opts.Add("-cbr");
+            if (bandwidth > 0) { opts.Add("-bandwidth"); opts.Add(new[] { "", "NB", "MB", "WB", "SWB", "FB" }[bandwidth]); }
+            if (sweep != 0) { opts.Add("-sweep"); opts.Add(sweep.ToString()); }
+            if (sweepMax != 0) { opts.Add("-sweep_max"); opts.Add(sweepMax.ToString()); }
+            var refPk = OpusEncoderSupport.RunReference(demo, work, pcm, app, channels, bitrate, opts.ToArray());
+            var enc = new OpusEncoder(new OpusEncoderSettings
+            {
+                Channels = channels, BitrateBps = bitrate, Complexity = complexity,
+                BitrateMode = rateMode == 2 ? OpusBitrateMode.Cbr : rateMode == 1 ? OpusBitrateMode.ConstrainedVbr : OpusBitrateMode.Vbr,
+                Bandwidth = bandwidth == 0 ? OpusBandwidth.Auto : (OpusBandwidth)(1100 + bandwidth),
+                Application = app == "voip" ? OpusApplication.Voip : app == "audio" ? OpusApplication.Audio : OpusApplication.RestrictedLowDelay,
+                ForceChannels = mono ? 1 : 0, InBandFec = fec, PacketLossPercent = fec ? 15 : 0, Dtx = dtx,
+            });
+            var buf = new byte[1500];
+            var frame = new short[frameSize * channels];
+            int br = bitrate, sw = sweep, mismatches = 0, first = -1;
+            string detail = "";
+            for (int i = 0; i < frames; i++)
+            {
+                pcm.AsSpan(i * frame.Length, frame.Length).CopyTo(frame);
+                int n = enc.Encode(frame, frameSize, buf);
+                if (sweep != 0)
+                {
+                    br += sw;
+                    if (sweepMax != 0)
+                    {
+                        if (br > sweepMax) sw = -sw;
+                        else if (br < bitrate) sw = -sw;
+                    }
+                    if (br < 1000) br = 1000;
+                    enc.Settings = enc.Settings with { BitrateBps = br };
+                }
+                bool same = n == refPk[i].Data.Length && buf.AsSpan(0, n).SequenceEqual(refPk[i].Data) && enc.FinalRange == refPk[i].Range;
+                if (!same)
+                {
+                    mismatches++;
+                    if (first < 0) { first = i; detail = $"ref {refPk[i].Data.Length} B toc {refPk[i].Data[0]:x2}, ours {n} B toc {buf[0]:x2}"; }
+                }
+            }
+            Assert.True(mismatches == 0, $"{config}: {mismatches} of {frames} packets differ; first {first}: {detail}");
+        }
+        finally
+        {
+            if (Directory.Exists(work)) Directory.Delete(work, true);
+        }
+    }
 }

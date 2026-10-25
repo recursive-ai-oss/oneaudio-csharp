@@ -144,6 +144,20 @@ for (int config = 0; config < 32; config += 5)
     int opusBytes = 0;
     for (int i = 0; i < 4; i++) opusBytes = opusEnc.Encode(tone, 960, opusOut);
     if (opusBytes < 10 || opus.Decode(opusOut.AsSpan(0, opusBytes), opusPcm) != 960) return Fail("opus encode");
+    // Speech-range rates take the SILK and hybrid paths, including mode switches, FEC and DTX.
+    var lowEnc = new OneAudio.Opus.OpusEncoder(new OneAudio.Opus.OpusEncoderSettings
+    {
+        BitrateBps = 14_000, InBandFec = true, PacketLossPercent = 10, Dtx = true, Application = OneAudio.Opus.OpusApplication.Voip,
+    });
+    var lowTone = new float[960 * 2];
+    int lowBytes = 0;
+    for (int i = 0; i < 12; i++)
+    {
+        for (int k = 0; k < 960; k++) lowTone[2 * k] = lowTone[2 * k + 1] = 0.3f * MathF.Sin((k + i * 960) * 0.05f) * (1f + MathF.Sin((k + i * 960) * 0.001f));
+        if (i == 6) lowEnc.Settings = lowEnc.Settings with { BitrateBps = 64_000 };
+        lowBytes = lowEnc.Encode(lowTone, 960, opusOut);
+        if (lowBytes > 1 && opus.Decode(opusOut.AsSpan(0, lowBytes), opusPcm) != 960) return Fail("opus silk encode");
+    }
     var opusFile = new MemoryStream();
     using (var writer = new OneAudio.Opus.OpusFileWriter(opusFile, new OneAudio.Opus.OpusFileWriterSettings { Channels = 6, InputSampleRate = 44_100 }, leaveOpen: true))
     {

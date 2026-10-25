@@ -82,7 +82,7 @@ public class OpusEncodeBenchmarks
     private OpusEncoder _ours = null!;
     private IOpusEncoder _concentus = null!;
 
-    [Params(64000, 128000)]
+    [Params(16000, 32000, 64000, 128000)]
     public int Bitrate { get; set; }
 
     [Params(10, 5)]
@@ -124,6 +124,21 @@ public class OpusEncodeBenchmarks
         _concentus.Complexity = Complexity;
         _concentus.UseVBR = true;
         _concentus.UseConstrainedVBR = false;
+        // Which coding modes each encoder picks at this rate, so the rows can be read as like-for-like (or not).
+        Console.WriteLine($"[{Bitrate} bps] modes (TOC config x count) OneAudio: {Modes(_ours, null)}; Concentus: {Modes(null, _concentus)}");
+        _ours.Reset();
+        _concentus.ResetState();
+    }
+
+    private string Modes(OpusEncoder? ours, IOpusEncoder? other)
+    {
+        var seen = new SortedDictionary<int, int>();
+        for (int pos = 0, n = 0; pos + 1920 <= _pcm.Length && n < 100; pos += 1920, n++)
+        {
+            int len = ours is not null ? ours.Encode(_pcm.AsSpan(pos, 1920), 960, _out) : other!.Encode(_pcm.AsSpan(pos, 1920), 960, _out, 1275);
+            if (len > 0) seen[_out[0] >> 3] = seen.GetValueOrDefault(_out[0] >> 3) + 1;
+        }
+        return string.Join(" ", seen.Select(kv => $"{kv.Key}x{kv.Value}"));
     }
 
     [GlobalCleanup]

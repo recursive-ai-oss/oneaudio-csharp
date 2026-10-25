@@ -89,6 +89,27 @@ public class OpusFileWriterTests
         }
     }
 
+    [Theory]
+    [InlineData(1, 12000, OpusApplication.Voip)]
+    [InlineData(1, 24000, OpusApplication.Audio)]
+    [InlineData(2, 20000, OpusApplication.Audio)]
+    [InlineData(2, 40000, OpusApplication.Voip)]
+    [InlineData(6, 72000, OpusApplication.Audio)]
+    public void SpeechRateFilesAreExactAndNearTheTarget(int channels, int bitrate, OpusApplication app)
+    {
+        int frames = 48000 * 30 + 77;
+        var src = OpusEncoderSupport.ToFloat(OpusEncoderSupport.MakeSignal(channels, frames, 6));
+        var file = Write(src, new OpusFileWriterSettings
+        {
+            Channels = channels, Encoder = new OpusEncoderSettings { BitrateBps = bitrate, Application = app },
+        }, 4800);
+        using var d = Open(file);
+        Assert.Equal(frames, d.LengthFrames);
+        var dec = ReadAll(d);
+        Assert.Equal(frames * channels, dec.Length);
+        Assert.InRange(file.Length * 8.0 / (frames / 48000.0) / bitrate, 0.9, 1.1);
+    }
+
     [Fact]
     public void SixChannelsKeepTheirOwnChannel()
     {
