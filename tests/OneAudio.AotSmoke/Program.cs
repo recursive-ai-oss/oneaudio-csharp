@@ -104,6 +104,7 @@ foreach (var q in new[] { ResamplerQuality.Linear, ResamplerQuality.Polyphase, R
     if (!fast.IsValid || !bent.IsValid || peak < 0.2f || mr.DroppedConverterRequests != 0) return Fail($"converted voices (peak {peak})");
 }
 
+if (VorbisSmoke.Run() != 0) return 1;
 // Opus: every mode through the packet decoder (random payloads are valid Opus), plus codec registration.
 var opusRegistry = new AudioCodecRegistry().AddOgg().AddOpus();
 if (opusRegistry.GetCodec(CodecId.Opus).Id != CodecId.Opus) return Fail("opus registration");
