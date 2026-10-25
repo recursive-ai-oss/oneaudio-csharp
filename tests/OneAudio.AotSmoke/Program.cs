@@ -135,6 +135,27 @@ for (int config = 0; config < 32; config += 5)
     if (opus.DecodePacketLoss(opusPcm.AsSpan(0, 960 * 2)) != 960) return Fail("opus loss");
 }
 
+// Opus encoder: packets, a multistream file and a round trip through the decoder.
+{
+    var opusEnc = new OneAudio.Opus.OpusEncoder(new OneAudio.Opus.OpusEncoderSettings { BitrateBps = 64_000 });
+    var tone = new float[960 * 2];
+    for (int i = 0; i < 960; i++) tone[2 * i] = tone[2 * i + 1] = 0.3f * MathF.Sin(i * 0.1f);
+    var opusOut = new byte[1500];
+    int opusBytes = 0;
+    for (int i = 0; i < 4; i++) opusBytes = opusEnc.Encode(tone, 960, opusOut);
+    if (opusBytes < 10 || opus.Decode(opusOut.AsSpan(0, opusBytes), opusPcm) != 960) return Fail("opus encode");
+    var opusFile = new MemoryStream();
+    using (var writer = new OneAudio.Opus.OpusFileWriter(opusFile, new OneAudio.Opus.OpusFileWriterSettings { Channels = 6, InputSampleRate = 44_100 }, leaveOpen: true))
+    {
+        var six = new float[441 * 6];
+        for (int i = 0; i < 441; i++) six[i * 6 + 2] = 0.2f * MathF.Sin(i * 0.2f);
+        for (int i = 0; i < 20; i++) writer.Write(six);
+    }
+    opusFile.Position = 0;
+    using var back = AudioDecoder.Open(opusFile, opusRegistry);
+    if (back.Format.Channels != 6 || Math.Abs(back.LengthFrames - 9_600) > 4) return Fail("opus file");
+}
+
 Console.WriteLine($"ok: {Frames} frames decoded, mixed peak L={peakL:F3} R={peakR:F3}, underruns={mixer.UnderrunEvents}");
 return 0;
 

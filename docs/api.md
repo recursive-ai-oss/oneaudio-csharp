@@ -38,6 +38,16 @@ Everything is in namespace `OneAudio`. Units: a **frame** is one sample per chan
 - `IAudioCodec.CreateDecoder(IPacketSource, AudioLimits)` turns packets into an `IAudioDecoder`.
 - `AudioCodecRegistry` starts empty: `new AudioCodecRegistry().AddWav()` and, as they arrive, further `AddXxx()` extension methods. Unused formats are trimmed away.
 
+## Opus encoding
+
+`OpusEncoder` (in `OneAudio.Opus`) turns interleaved 48 kHz `float` (or `short`) PCM into Opus packets: `Encode(pcm, frameSize, packet)` takes 120, 240, 480, 960, 1920 or 2880 samples per channel (2.5 to 60 ms; 40 and 60 ms are two or three 20 ms frames in one packet) and returns the packet length; `FinalRange` is the range coder state the decoder reproduces; `LookaheadSamples` (312) is the Ogg pre-skip. `OpusEncoderSettings` holds `Channels` (1 or 2), `Application` (`Audio`, `Voip`, `RestrictedLowDelay`), `BitrateBps` (`AutoBitrate`, `MaxBitrate` or 500 to 300000 per channel), `BitrateMode` (`Vbr` default, `ConstrainedVbr`, `Cbr`), `Complexity` 0 to 10 (default 10), `Bandwidth` / `MaxBandwidth`, `Signal`, `ForceChannels` and `PacketLossPercent`. Bad values throw `ArgumentOutOfRangeException`; wrong buffer sizes or frame sizes throw `ArgumentException`. Input is clipped at +-2.0 (NaN becomes silence); nothing is dithered. Encoding allocates nothing after construction and gives identical bytes for identical input on a platform.
+
+**Scope of this version:** every packet uses the CELT layer. The mode, bandwidth, channel-count and rate logic of the reference encoder is in place, but SILK and hybrid packets (and so in-band FEC and DTX) are not produced yet; low bitrates therefore sound like CELT at a low rate. Only 48 kHz input is taken at packet level (the file writer resamples). With identical settings the packets are byte-identical to the RFC 6716 reference encoder wherever that encoder also picks CELT.
+
+`OpusMultistreamEncoder` codes 1 to 8 channels with channel mapping family 1 (coupled and mono streams, self-delimited framing for all but the last stream; the bitrate is split by channel count; input in Vorbis channel order).
+
+`OpusFileWriter` writes an Ogg Opus file (RFC 7845) to a `Stream`: `new OpusFileWriter(stream, new OpusFileWriterSettings { Channels, InputSampleRate, Encoder, FrameMilliseconds, Comments })`, `Write(float[])` any number of times, `Finish()` or `Dispose()`. Input that is not 48 kHz goes through the polyphase resampler; more than two channels are taken in the standard speaker order (a WAV file's) and written as family 1. OpusHead carries the pre-skip and the original input rate, pages hold at most one second, and the last granule position trims the padding so the decoded length is exactly the number of 48 kHz samples written. `Write` allocates nothing.
+
 ## Errors and limits
 
 `OneAudioException` is the base of everything the library says about data: `AudioFormatException` (malformed), `UnsupportedAudioFormatException` (valid but not supported / no codec registered), `AudioLimitExceededException` (names the limit, the maximum and the request). Besides these, public methods throw only argument exceptions, `NotSupportedException`, `ObjectDisposedException`, stream I/O exceptions and `OperationCanceledException`.
