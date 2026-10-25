@@ -42,6 +42,9 @@ ENTRIES=(
   "vorbis-xiph-test-short2|https://people.xiph.org/~xiphmont/test-vectors/vorbis/test-short2.ogg|6bd3f59e0fa77904edd35c73dadd6558e2a36d78c9d7bc5db223862bf092fcc2|raw"
   "vorbis-xiph-test-short|https://people.xiph.org/~xiphmont/test-vectors/vorbis/test-short.ogg|183510552403021fb90ce43796fcc88e16c8bb4ae5d0d72a316b8e51afc395fa|raw"
   "vorbis-xiph-unused-mode-test|https://people.xiph.org/~xiphmont/test-vectors/vorbis/unused-mode-test.ogg|e27ae6fc2f7c0037c28328801c46d966abcee3050e3ebd40bf097f7986f50f94|raw"
+  # EBU loudness test set v05 (Tech 3341 / 3342 minimum-requirement signals). The EBU site refuses some networks (HTTP 403 from its CDN),
+  # so this pins the Internet Archive's copy of https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip; the SHA-256 is that of the EBU file.
+  "ebu-loudness-v05|https://web.archive.org/web/20170331172519id_/https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip|9cc500b4df83f7c21855c74dce795ef5209a752bf884253ae57d0ce512efb062|zip"
 )
 
 mkdir -p "$cache/_dl"
