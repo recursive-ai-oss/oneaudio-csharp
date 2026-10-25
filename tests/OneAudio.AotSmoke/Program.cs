@@ -105,6 +105,7 @@ foreach (var q in new[] { ResamplerQuality.Linear, ResamplerQuality.Polyphase, R
 }
 
 if (VorbisSmoke.Run() != 0) return 1;
+if (Mp3Smoke.Run() != 0) return 1;
 
 // Loudness: a -20 dBFS stereo tone must read about -20 LUFS, and the normalisation gain follows from it.
 {

@@ -87,7 +87,6 @@ public sealed class Mp3Decoder : IAudioDecoder
     private long _skip;
     private long _pos;
     private long _length;
-    private long _frameNo;        // audio frame index of the next frame to decode
     private long _frameCount = -1;
     private long[] _index = [];
     private int _indexCount;
@@ -95,7 +94,7 @@ public sealed class Mp3Decoder : IAudioDecoder
     private bool _indexed;
     private bool _disposed;
 
-    private Mp3Decoder(Stream stream, bool leaveOpen, Mp3FrameReader reader, Mp3Header first, long audioStart, MpegTag tag, AudioLimits limits)
+    private Mp3Decoder(Stream stream, bool leaveOpen, Mp3FrameReader reader, Mp3Header first, long audioStart, MpegTag tag, AudioLimits limits, CancellationToken cancellationToken)
     {
         _stream = stream;
         _leaveOpen = leaveOpen;
@@ -115,7 +114,7 @@ public sealed class Mp3Decoder : IAudioDecoder
         long frames = tag.Frames;
         if (frames < 0 && CanSeek)
         {
-            BuildIndex();
+            BuildIndex(cancellationToken);
             frames = _frameCount;
         }
         if (frames >= 0)
@@ -190,7 +189,7 @@ public sealed class Mp3Decoder : IAudioDecoder
         if (tag.IsInfoFrame) reader.Advance(length);
         long audioStart = reader.Position;
         // For fixed-rate streams the frame count can be checked against the stream size; the tag is only a claim.
-        var dec = new Mp3Decoder(stream, leaveOpen, reader, first, audioStart, tag, limits);
+        var dec = new Mp3Decoder(stream, leaveOpen, reader, first, audioStart, tag, limits, cancellationToken);
         return dec;
     }
 
@@ -256,7 +255,6 @@ public sealed class Mp3Decoder : IAudioDecoder
             else for (int i = 0; i < _spf; i++) _pcm[i] = (_native[2 * i] + _native[2 * i + 1]) * 0.5f;
         }
         _reader.Advance(length);
-        _frameNo++;
         _pcmPos = 0;
         _pcmLen = _spf * _channels;
         return true;
@@ -286,7 +284,6 @@ public sealed class Mp3Decoder : IAudioDecoder
             _reader.SeekTo(_audioStart);
         }
         _layer3.Reset();
-        _frameNo = startFrame;
         _pcmPos = _pcmLen = 0;
         _skip = d - startFrame * _spf;
         _pos = frame;
@@ -299,7 +296,7 @@ public sealed class Mp3Decoder : IAudioDecoder
     }
 
     /// <summary>Walks the frame headers once, remembering the offset of every <c>_stride</c>-th frame.</summary>
-    private void BuildIndex()
+    private void BuildIndex(CancellationToken cancellationToken = default)
     {
         long resume = _reader.Position;
         _reader.SeekTo(_audioStart);
@@ -309,6 +306,7 @@ public sealed class Mp3Decoder : IAudioDecoder
         long count = 0;
         while (_reader.Next(out _, out int length, long.MaxValue))
         {
+            if ((count & 1023) == 0) cancellationToken.ThrowIfCancellationRequested();
             if (count % _stride == 0)
             {
                 if (_indexCount == _index.Length)
