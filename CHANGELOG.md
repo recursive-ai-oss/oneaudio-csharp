@@ -5,10 +5,7 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
-### Added
-
-- `AudioMixer.TryEnableBusMeter(bus)`: enables a bus meter without throwing when no meter is free (or the mixer has none); `FreeBusMeters`
-  tells "no slot" from "queue full" after a false. `AudioMixer.IsBusMetered(bus)` reports whether a bus currently holds a meter.
+## [0.1.0-alpha.5] - 2026-10-25
 
 ### Fixed
 
@@ -16,6 +13,14 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
   first or last samples. The one granule position on that page marks where the stream ends, but the decoder also read it as the position of the
   stream's first sample and cut the difference from the start. It is now taken as the end trim only. Streams whose first audio page is not the
   last page are unchanged.
+
+## [0.1.0-alpha.4] - 2026-10-25
+
+### Added
+
+- `AudioMixer.TryEnableBusMeter(bus)`: enables a bus meter without throwing when no meter is free (or the mixer has none); `FreeBusMeters`
+  tells "no slot" from "queue full" after a false. `AudioMixer.IsBusMetered(bus)` reports whether a bus currently holds a meter.
+- Results in the README: conformance, fuzzing and benchmarks against other libraries and native tools, losses included.
 
 ## [0.1.0-alpha.3] - 2026-10-24
 
