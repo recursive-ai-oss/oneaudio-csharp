@@ -10,6 +10,7 @@
     <Project Path="bench/OneAudio.Benchmarks/OneAudio.Benchmarks.csproj" />
   </Folder>
   <Folder Name="/fuzz/">
+    <Project Path="fuzz/OneAudio.Fuzz.Flac/OneAudio.Fuzz.Flac.csproj" />
     <Project Path="fuzz/OneAudio.Fuzz.Ogg/OneAudio.Fuzz.Ogg.csproj" />
     <Project Path="fuzz/OneAudio.Fuzz.Opus/OneAudio.Fuzz.Opus.csproj" />
     <Project Path="fuzz/OneAudio.Fuzz.Vorbis/OneAudio.Fuzz.Vorbis.csproj" />

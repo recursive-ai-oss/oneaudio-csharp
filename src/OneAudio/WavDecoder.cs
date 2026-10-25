@@ -252,7 +252,10 @@ public sealed class WavDecoder : IAudioDecoder
         if (count <= 0) return;
         if (seekable)
         {
-            s.Seek(count, SeekOrigin.Current);
+            // A chunk size that runs past the end of the stream is a truncated file. Stop at the end instead of seeking
+            // beyond it (a MemoryStream refuses offsets past 2 GiB); the next header read reports the truncation.
+            long target = Math.Min(s.Position + count, s.Length);
+            s.Position = Math.Max(target, s.Position);
         }
         else
         {

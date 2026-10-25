@@ -371,6 +371,10 @@ public sealed class VorbisDecoder : IAudioDecoder
         try { setup = VorbisSetup.ParseIdentification(d, _limits); }
         catch (UnsupportedAudioFormatException) { return false; }
         if (FormatOf(setup) != _format) return false;
+        // The header must also agree with what the scan of this link found. A damaged file can carry a second
+        // identification header with another channel count inside a link; adopting it would leave the active link
+        // marked as loaded while the synthesizer holds a setup that does not match the link's format.
+        if (_ogg is not null && FormatOf(setup) != _linkFormats[Math.Min(_ogg.CurrentLink, _linkFormats.Length - 1)]) return false;
         ReadRemainingHeaders(_packets, setup, _limits);
         _setup = setup;
         _synth = new VorbisSynthesizer(setup);

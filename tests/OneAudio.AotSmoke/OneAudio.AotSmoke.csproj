@@ -8,6 +8,11 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Test-stream generators, shared with the unit tests so the Vorbis check decodes bytes we produced. -->
+    <Compile Include="../OneAudio.Tests/OggBuilder.cs" Link="Shared/OggBuilder.cs" />
+    <Compile Include="../OneAudio.Tests/VorbisStreamBuilder.cs" Link="Shared/VorbisStreamBuilder.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../../src/OneAudio/OneAudio.csproj" />
   </ItemGroup>
 </Project>

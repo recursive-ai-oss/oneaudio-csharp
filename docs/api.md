@@ -39,6 +39,17 @@ Everything is in namespace `OneAudio`. Units: a **frame** is one sample per chan
 - **Time alignment:** output frame m is the signal at input time m / ratio; filter delay is compensated. `LatencyFrames` is the look-ahead in output frames: after N input frames about N * ratio - LatencyFrames output frames exist. `Flush` returns the rest (call until it returns 0).
 - **Ratio:** `ResamplerOptions.MinRatio` (default 0.25) and `MaxRatio` (default 16) bound `SetRatio` and size the preallocated state (polyphase memory grows as 1 / MinRatio). `SetRatio` is glitch-free: the read position is continuous. In polyphase modes, a ratio below 1 that moves the cutoff by more than a few percent redesigns the coefficient bank inside `SetRatio` (allocation-free, but roughly 0.3 ms of work at ratio 0.5 to 1), so bend pitch with ratio changes of a few percent per call rather than per frame.
 
+## Loudness
+
+`LoudnessMeter(sampleRate, channels, channelMask, truePeak, loudnessRange)` (or from an `AudioFormat`) measures per ITU-R BS.1770-5 and EBU R 128. Feed interleaved float blocks of any size to `Process`; results never depend on how the stream was split into blocks. Everything is allocated in the constructor, so a meter can run on a real-time thread (single thread at a time, no locks).
+
+- **Readouts:** `MomentaryLufs` (400 ms), `ShortTermLufs` (3 s), `IntegratedLufs` (gated, -70 LUFS absolute and 10 LU relative), `MaxMomentaryLufs`, `MaxShortTermLufs`, `LoudnessRange` (EBU Tech 3342, LU), `TruePeak` / `TruePeakDbtp` (4x oversampling, all channels). No data yet reads as negative infinity (range: 0). `Reset()` clears everything.
+- **Channels:** weights come from the channel mask (1.41 for surround and side channels, LFE left out of the loudness but not the true peak); without a mask the standard layouts are assumed, and 5 channels mean L R C Ls Rs.
+- **Sample rates:** the K-weighting filters are designed for the actual rate (4 kHz and up) so that their response matches the 48 kHz table of the Recommendation. Non-finite input samples count as zero.
+- **True peak:** the interpolation filter lags the input by 12 samples; a peak inside the last 12 frames fed shows up only after more audio arrives.
+- **`LoudnessAnalyzer.Measure(decoder, truePeak, cancellationToken)`** reads a decoder to the end through a pooled buffer and returns a `LoudnessResult`; `Measure(span, format)` does the same for samples in memory.
+- **Normalisation:** `LoudnessNormalization.ComputeGain(integratedLufs, truePeakDbtp, targetLufs = -23, ceilingDbtp = -1)` returns a `NormalizationGain` (`GainDb`, `Linear`, `LimitedByPeak`): the gain to reach the target, cut back if the true peak would pass the ceiling. Silence gives 0 dB. `LoudnessResult.GainFor(...)` is the shortcut.
+
 ## Mixing
 
 `AudioMixer` is the real-time mixer. The host creates it with `MixerOptions` (fixed for its lifetime): `SampleRate`, `Channels`, `OutputChannelMask` (default: the conventional layout for the channel count), `MaxVoices`, `MaxBuses`, `MaxSourceChannels` (8), `MaxBlockFrames`, `CommandCapacity`, `EventCapacity`, `SmoothingMilliseconds` (10) and `ResamplerFactory`.
