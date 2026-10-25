@@ -3,7 +3,9 @@
 All notable changes to `RecursiveAI.OneAudio` are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is released. Until then, every `0.x` release may change the API.
 
-## [Unreleased] (0.1.0-alpha.3)
+## [Unreleased]
+
+## [0.1.0-alpha.3] - 2026-10-24
 
 ### Added
 
