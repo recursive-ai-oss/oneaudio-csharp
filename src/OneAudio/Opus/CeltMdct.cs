@@ -5,7 +5,7 @@ namespace OneAudio.Opus;
 /// RFC 6716 (Simplified BSD licence, see THIRD-PARTY-NOTICES.md). Sizes are fixed by the 48 kHz CELT mode: a
 /// 1920-point MDCT for 20 ms frames and its 1/2, 1/4 and 1/8 divisions for shorter frames.
 /// </summary>
-internal sealed class CeltMdct
+internal sealed partial class CeltMdct
 {
     private const int N = 1920;
     private const int MaxShift = 3;
@@ -13,25 +13,17 @@ internal sealed class CeltMdct
     /// <summary>The shared immutable tables.</summary>
     public static readonly CeltMdct Instance = new();
 
-    private readonly float[] _twiddles; // interleaved cos, sin of -2 pi i / 480
-    private readonly float[] _trig;     // cos(2 pi i / N), i in [0, N/4]
-    private readonly short[][] _bitrev = new short[MaxShift + 1][];
-    private readonly short[][] _factors = new short[MaxShift + 1][];
-    private readonly int[] _nfft = new int[MaxShift + 1];
+    internal readonly float[] _twiddles; // interleaved cos, sin of -2 pi i / 480
+    internal readonly float[] _trig;     // cos(2 pi i / N), i in [0, N/4]
+    internal readonly short[][] _bitrev = new short[MaxShift + 1][];
+    internal readonly short[][] _factors = new short[MaxShift + 1][];
+    internal readonly int[] _nfft = new int[MaxShift + 1];
 
     private CeltMdct()
     {
         int baseN = N >> 2;
-        _twiddles = new float[2 * baseN];
-        for (int i = 0; i < baseN; i++)
-        {
-            double phase = -2 * Math.PI / baseN * i;
-            _twiddles[2 * i] = (float)Math.Cos(phase);
-            _twiddles[2 * i + 1] = (float)Math.Sin(phase);
-        }
-        _trig = new float[(N >> 2) + 1];
-        for (int i = 0; i <= N >> 2; i++)
-            _trig[i] = (float)Math.Cos(2 * Math.PI * i / N);
+        _twiddles = CeltMdctTables.RefTwiddles;
+        _trig = CeltMdctTables.RefTrig;
         for (int s = 0; s <= MaxShift; s++)
         {
             int nfft = baseN >> s;
@@ -284,7 +276,7 @@ internal sealed class CeltMdct
         int n = N >> shift;
         int n2 = n >> 1;
         int n4 = n >> 2;
-        float sine = (float)(2 * Math.PI * 0.125f / n);
+        float sine = 2f * 3.141592653f * 0.125f / n;
         var t = _trig;
 
         // Pre-rotation

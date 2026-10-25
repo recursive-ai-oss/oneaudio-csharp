@@ -433,7 +433,7 @@ internal sealed partial class CeltDecoder
     }
 
     /// <summary>Pitch-adaptive comb post-filter (RFC 6716 section 4.3.7.1). x and y may be the same array.</summary>
-    private static void CombFilter(float[] y, int yo, float[] x, int xo, int t0, int t1, int n,
+    internal static void CombFilter(float[] y, int yo, float[] x, int xo, int t0, int t1, int n,
         float g0, float g1, int tapset0, int tapset1, ReadOnlySpan<float> window, int overlap)
     {
         var gains = CeltTables.CombGains;

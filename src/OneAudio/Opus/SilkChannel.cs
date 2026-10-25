@@ -14,12 +14,16 @@ internal sealed class NlsfCodebook
     public required byte[] EcSel { get; init; }
     public required byte[] EcICdf { get; init; }
     public required short[] DeltaMinQ15 { get; init; }
+    public int InvQuantStepSizeQ6 { get; init; }
+    public byte[] EcRatesQ5 { get; init; } = [];
 
     public static readonly NlsfCodebook NbMb = new()
     {
         NVectors = 32,
         Order = 10,
         QuantStepSizeQ16 = 11796, // 0.18 in Q16
+        InvQuantStepSizeQ6 = 356, // 1 / 0.18 in Q6
+        EcRatesQ5 = SilkEncTables.NLSFCB2BitsNBMBQ5,
         CB1NlsfQ8 = SilkTables.NLSFCB1NBMBQ8,
         CB1ICdf = SilkTables.NLSFCB1ICDFNBMB,
         PredQ8 = SilkTables.NLSFPREDNBMBQ8,
@@ -33,6 +37,8 @@ internal sealed class NlsfCodebook
         NVectors = 32,
         Order = 16,
         QuantStepSizeQ16 = 9830, // 0.15 in Q16
+        InvQuantStepSizeQ6 = 427, // 1 / 0.15 in Q6
+        EcRatesQ5 = SilkEncTables.NLSFCB2BitsWBQ5,
         CB1NlsfQ8 = SilkTables.NLSFCB1WBQ8,
         CB1ICdf = SilkTables.NLSFCB1ICDFWB,
         PredQ8 = SilkTables.NLSFPREDWBQ8,
@@ -569,7 +575,7 @@ internal sealed class SilkChannel
         NlsfStabilize(pNlsfQ15, cb.DeltaMinQ15, order);
     }
 
-    private static void NlsfVqWeightsLaroia(Span<short> w, ReadOnlySpan<short> nlsf, int d)
+    internal static void NlsfVqWeightsLaroia(Span<short> w, ReadOnlySpan<short> nlsf, int d)
     {
         const int num = 1 << (15 + 2);
         int tmp1 = Math.Max((int)nlsf[0], 1);
@@ -591,7 +597,7 @@ internal sealed class SilkChannel
         w[d - 1] = (short)Math.Min(tmp1 + tmp2, short.MaxValue);
     }
 
-    private static void NlsfStabilize(Span<short> nlsf, ReadOnlySpan<short> deltaMin, int l)
+    internal static void NlsfStabilize(Span<short> nlsf, ReadOnlySpan<short> deltaMin, int l)
     {
         const int maxLoops = 20;
         int loops;
@@ -901,7 +907,7 @@ internal sealed class SilkChannel
     }
 
     /// <summary>LPC analysis (whitening) filter (silk_LPC_analysis_filter). Wrap-around is deliberate and matches the reference.</summary>
-    private static void LpcAnalysisFilter(Span<short> output, ReadOnlySpan<short> input, ReadOnlySpan<short> b, int len, int d)
+    internal static void LpcAnalysisFilter(Span<short> output, ReadOnlySpan<short> input, ReadOnlySpan<short> b, int len, int d)
     {
         for (int ix = d; ix < len; ix++)
         {
