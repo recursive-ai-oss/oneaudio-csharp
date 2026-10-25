@@ -1,5 +1,6 @@
 using OneAudio.Effects;
 using OneAudio.Kernels;
+using OneAudio.Loudness;
 using OneAudio.Mixing;
 
 namespace OneAudio;
@@ -78,7 +79,56 @@ public sealed partial class AudioMixer
         public float DuckThreshold, DuckDepth = 1f, DuckAttack, DuckRelease;
         public float DuckEnv, DuckGain = 1f;
         public EffectChain Fx = null!;
+        public MeterTap? Meter;
     }
+
+    // Render-side state of one loudness meter slot. The published value is what control threads read.
+    private sealed class MeterTap
+    {
+        public readonly LoudnessMeter Meter;
+        public readonly SeqLockSlot<MeterPublication> Published = new();
+        public long Generation;
+        private readonly int _rate;
+        private double _integrated = double.NegativeInfinity;
+        private long _nextIntegratedAt;
+
+        public MeterTap(LoudnessMeter meter, int rate)
+        {
+            Meter = meter;
+            _rate = rate;
+        }
+
+        public void Start(long generation)
+        {
+            Generation = generation;
+            Meter.Reset();
+            _integrated = double.NegativeInfinity;
+            _nextIntegratedAt = Boundary(1);
+            Published.Write(new MeterPublication(generation, LoudnessSnapshot.Empty));
+        }
+
+        // The gated blocks the integrated loudness is made of arrive every 100 ms, so the (costly) gated readout is refreshed only then.
+        private long Boundary(long hop) => hop * _rate / 10;
+
+        public void Feed(ReadOnlySpan<float> interleaved)
+        {
+            var m = Meter;
+            m.Process(interleaved);
+            long frames = m.FramesProcessed;
+            if (frames >= _nextIntegratedAt)
+            {
+                _integrated = m.IntegratedLufs;
+                long hop = frames * 10 / _rate;
+                while (Boundary(hop + 1) <= frames) hop++;
+                while (hop > 0 && Boundary(hop) > frames) hop--;
+                _nextIntegratedAt = Boundary(hop + 1);
+            }
+            Published.Write(new MeterPublication(Generation, new LoudnessSnapshot(
+                m.MomentaryLufs, m.ShortTermLufs, _integrated, m.TruePeakDbtp, m.MaxMomentaryLufs, m.MaxShortTermLufs, frames)));
+        }
+    }
+
+    private readonly record struct MeterPublication(long Generation, LoudnessSnapshot Snapshot);
 
     private readonly Voice[] _voices;
     private readonly int _voiceCount;
@@ -136,6 +186,7 @@ public sealed partial class AudioMixer
             }
             for (int i = 0; i < _orderCount; i++) ProcessBus(_buses[_order[i]], n);
             FinishMaster(block, n);
+            if (_master.Meter != null) _master.Meter.Feed(block);
 
             Volatile.Write(ref _activeVoices, active);
             Volatile.Write(ref _timeline, blockStart + n);
@@ -237,6 +288,15 @@ public sealed partial class AudioMixer
                         fx.Reverb = proc;
                     }
                     else proc.Configure(c.Reverb!, c.Frames < 0 ? _smoothFrames : c.Frames);
+                    break;
+                }
+                case CommandKind.SetBusMeter:
+                {
+                    var b = c.Bus < 0 ? _master : _buses[c.Bus];
+                    var tap = _meterTaps[c.Aux];
+                    if (!c.Flag) { if (b.Meter == tap) b.Meter = null; break; }
+                    b.Meter = tap;
+                    tap.Start(c.Id);
                     break;
                 }
                 case CommandKind.SetLimiter:
@@ -644,7 +704,9 @@ public sealed partial class AudioMixer
         bool ducking = b.DuckSource >= 0 || b.DuckGain < 1f;
         if (ducking) ComputeDuck(b, n);
         RunEffects(b, n);
-        if (!ApplyGain(b, n)) return;
+        bool audible = ApplyGain(b, n);
+        if (b.Meter != null) FeedBusMeter(b, n, audible);
+        if (!audible) return;
 
         int oc = _channels;
         var parent = b.Parent >= 0 ? _buses[b.Parent] : _master;
@@ -654,6 +716,15 @@ public sealed partial class AudioMixer
             if (ducking) MixKernels.AddCurve(Row(parent.Buf, c, 0, n), Row(b.Buf, c, 0, n), _curve.AsSpan(0, n));
             else MixKernels.AddScaled(Row(parent.Buf, c, 0, n), Row(b.Buf, c, 0, n), 1f);
         }
+    }
+
+    // Feeds a bus's meter with what leaves the bus: its buffer after effects and gain, or silence when nothing audible remains.
+    private void FeedBusMeter(Bus b, int n, bool audible)
+    {
+        var scratch = _meterScratch.AsSpan(0, n * _channels);
+        if (audible) MixKernels.Interleave(b.Buf, _maxBlock, _channels, n, scratch);
+        else scratch.Clear();
+        b.Meter!.Feed(scratch);
     }
 
     // True when the bus's gain is and stays zero over this pass, so nothing it holds is audible.
