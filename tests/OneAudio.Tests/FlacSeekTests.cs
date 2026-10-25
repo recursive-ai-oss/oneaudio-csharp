@@ -128,6 +128,21 @@ public class FlacSeekTests
         CheckSeeks(() => AudioDecoder.Open(new MemoryStream(ogg), FlacTestEnv.Registry), 9, 25);
     }
 
+    [Theory]
+    [InlineData("ogg_stereo16", "stereo16_midside_small")]
+    [InlineData("ogg_mono24", "mono24_lpc")]
+    public void OggFlac_FromAnotherMuxer_DecodesLikeNative(string ogg, string native)
+    {
+        // Files remuxed from the native fixtures by a separate tool (ffmpeg -c:a copy -f ogg), so the Ogg framing is not our own.
+        var oggBytes = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "testdata", "flac", ogg + ".oga"));
+        using var n = FlacFixtures.Open(FlacFixtures.Bytes(native));
+        using var o = AudioDecoder.Open(new MemoryStream(oggBytes), FlacTestEnv.Registry);
+        Assert.Equal(n.Format, o.Format);
+        Assert.Equal(n.LengthFrames, o.LengthFrames);
+        Assert.Equal(FlacFixtures.DecodeAll(n), FlacFixtures.DecodeAll(o));
+        CheckSeeks(() => AudioDecoder.Open(new MemoryStream(oggBytes), FlacTestEnv.Registry), 11, 25);
+    }
+
     [Fact]
     public void OggFlac_NonSeekable_DecodesForward()
     {

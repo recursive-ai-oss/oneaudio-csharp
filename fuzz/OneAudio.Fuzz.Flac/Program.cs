@@ -3,8 +3,8 @@ using OneAudio.Flac;
 using SharpFuzz;
 
 // Fuzz target for the FLAC decoder: metadata parsing, frame decoding (all subframe and residual types), seeking by
-// SEEKTABLE and by frame-sync search, and Ogg-carried FLAC. The first input byte picks the entry point: bit 0 set means
-// the rest is read as an Ogg file; bit 1 set reads through a stream that cannot seek. Under libFuzzer (after SharpFuzz
+// SEEKTABLE and by frame-sync search, and Ogg-carried FLAC (the format is sniffed, so native and Ogg inputs both work).
+// The first input byte picks the stream type: bit 1 set reads through a stream that cannot seek. Under libFuzzer (after SharpFuzz
 // instrumentation of OneAudio.dll) run with no arguments; with file arguments it replays them once.
 static void Drain(IAudioDecoder d, int budgetReads)
 {
