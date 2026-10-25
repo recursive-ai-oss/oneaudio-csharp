@@ -71,6 +71,26 @@ public class Mp3OracleTests
         Assert.True(rms < 1e-6, line);
     }
 
+    [Theory]
+    [MemberData(nameof(Mp3TestEnv.ComplianceNamesData), MemberType = typeof(Mp3TestEnv))]
+    public void ComplianceStreamsMatchMpg123(string name)
+    {
+        Mp3TestEnv.RequireCompliance(name);
+        Assert.SkipUnless(Mpg123 is not null, "mpg123 not on PATH.");
+        var ours = Mp3TestEnv.DecodeNative(Mp3TestEnv.ComplianceBit(name));
+        var theirs = Mpg123Decode(Mp3TestEnv.ComplianceBit(name))!;
+        var (rms, max) = Mp3TestEnv.Compare(ours, theirs);
+        string line = $"mpg123 compliance {name}: ours {ours.Length} samples, mpg123 {theirs.Length}, rms={rms:E2} max={max:E2}";
+        Mp3TestEnv.Report(line);
+        Assert.Equal(theirs.Length, ours.Length);
+        // he_mode switches between mono and stereo frames. At each switch mpg123 does not carry the filterbank memory over the
+        // way the reference decode does (frames 10 and 110 differ from the reference by thousands of 16-bit steps there;
+        // this decoder matches the reference at the switches), so only the report is kept for that stream.
+        if (name == "he_mode") return;
+        Assert.True(max < 1e-5, line);
+        Assert.True(rms < 1e-6, line);
+    }
+
     [Fact]
     public void ReportTable()
     {

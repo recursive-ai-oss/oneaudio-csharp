@@ -19,6 +19,8 @@ internal static class Mp3TestEnv
         return d;
     }
 
+    public static TheoryData<string> ComplianceNamesData() => ComplianceData();
+
     public static string ComplianceBit(string name) => Path.Combine(CorpusDir!, $"mp3-iso-{name}-bit", name + ".bit");
     public static string CompliancePcm(string name) => Path.Combine(CorpusDir!, $"mp3-iso-{name}-pcm", name + ".pcm");
 
