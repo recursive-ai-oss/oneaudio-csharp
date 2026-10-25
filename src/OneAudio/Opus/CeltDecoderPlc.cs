@@ -263,9 +263,9 @@ internal sealed partial class CeltDecoder
         }
     }
 
-    private static int GetPulses(int i) => i < 8 ? i : (8 + (i & 7)) << ((i >> 3) - 1);
+    internal static int GetPulses(int i) => i < 8 ? i : (8 + (i & 7)) << ((i >> 3) - 1);
 
-    private static int Bits2Pulses(int band, int lm, int bits)
+    internal static int Bits2Pulses(int band, int lm, int bits)
     {
         lm++;
         int cacheOff = CeltTables.CacheIndex[lm * NbEBands + band];
@@ -283,7 +283,7 @@ internal sealed partial class CeltDecoder
         return hi;
     }
 
-    private static int Pulses2Bits(int band, int lm, int pulses)
+    internal static int Pulses2Bits(int band, int lm, int pulses)
     {
         lm++;
         int cacheOff = CeltTables.CacheIndex[lm * NbEBands + band];
@@ -495,7 +495,7 @@ internal sealed partial class CeltDecoder
     private readonly float[] _lpc4 = new float[4];
     private readonly float[] _mem4 = new float[4];
 
-    private static void FindBestPitch(float[] xcorr, float[] y, int yOff, int len, int maxPitch, Span<int> bestPitch)
+    internal static void FindBestPitch(float[] xcorr, float[] y, int yOff, int len, int maxPitch, Span<int> bestPitch)
     {
         float syy = 1;
         Span<float> bestNum = stackalloc float[2];
@@ -576,7 +576,7 @@ internal sealed partial class CeltDecoder
         return 2 * bestPitch[0] - offset;
     }
 
-    private static void CeltLpc(float[] lpc, int off, ReadOnlySpan<float> ac, int p)
+    internal static void CeltLpc(float[] lpc, int off, ReadOnlySpan<float> ac, int p)
     {
         float error = ac[0];
         for (int i = 0; i < p; i++) lpc[off + i] = 0;
@@ -602,7 +602,7 @@ internal sealed partial class CeltDecoder
         }
     }
 
-    private static void CeltFir(float[] x, float[] num, int numOff, float[] y, int n, int ord, float[] mem)
+    internal static void CeltFir(float[] x, float[] num, int numOff, float[] y, int n, int ord, float[] mem)
     {
         for (int i = 0; i < n; i++)
         {

@@ -110,7 +110,7 @@ internal sealed partial class CeltDecoder
         }
     }
 
-    private static int ComputeQn(int n, int b, int offset, int pulseCap, bool stereo)
+    internal static int ComputeQn(int n, int b, int offset, int pulseCap, bool stereo)
     {
         int n2 = 2 * n - 1;
         if (stereo && n == 2) n2--;
@@ -162,7 +162,7 @@ internal sealed partial class CeltDecoder
         for (int j = 0; j < n; j++) x[j] = tmp[j];
     }
 
-    private static void Haar1(Span<float> x, int n0, int stride)
+    internal static void Haar1(Span<float> x, int n0, int stride)
     {
         n0 >>= 1;
         for (int i = 0; i < stride; i++)
@@ -177,7 +177,7 @@ internal sealed partial class CeltDecoder
         }
     }
 
-    private static void StereoMerge(Span<float> x, Span<float> y, float mid, int n)
+    internal static void StereoMerge(Span<float> x, Span<float> y, float mid, int n)
     {
         float xp = 0, side = 0;
         for (int j = 0; j < n; j++)
