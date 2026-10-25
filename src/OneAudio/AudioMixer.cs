@@ -1,4 +1,5 @@
 using OneAudio.Effects;
+using OneAudio.Loudness;
 
 namespace OneAudio;
 
@@ -150,6 +151,15 @@ public sealed record MixerOptions
     public int MaxReverbs { get; init; } = 2;
 
     /// <summary>
+    /// Loudness meters that may run at once across all buses and the master output (<see cref="AudioMixer.EnableBusMeter"/>). Each is
+    /// built when the mixer is created and holds a BS.1770 meter with true peak (about 0.1 MB plus 4 KB per output channel), and the
+    /// render path feeds an enabled one about as much work as measuring the same signal with a <see cref="LoudnessMeter"/>. With 0 no meter
+    /// exists and the render path pays one branch per bus. The mixer's sample rate must then be at least
+    /// <see cref="LoudnessMeter.MinSampleRate"/>. Range 0 to 64. Default 0 (metering is opt-in).
+    /// </summary>
+    public int MaxBusMeters { get; init; }
+
+    /// <summary>
     /// Lookahead of the master limiter (<see cref="AudioMixer.SetLimiter"/>), in milliseconds, 0 to 100. A limiter needs to see a peak
     /// before it plays, so the whole output is delayed by this much (<see cref="AudioMixer.LatencyFrames"/>), whether or not the limiter is
     /// switched on; the latency is therefore fixed for the mixer's lifetime. 0 builds no limiter and adds no latency. A few milliseconds (5)
@@ -180,6 +190,10 @@ public sealed record MixerOptions
         ArgumentOutOfRangeException.ThrowIfNegative(RatioRedesignsPerPass);
         ArgumentOutOfRangeException.ThrowIfNegative(MaxReverbs);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxReverbs, 16);
+        ArgumentOutOfRangeException.ThrowIfNegative(MaxBusMeters);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxBusMeters, 64);
+        if (MaxBusMeters > 0 && (SampleRate < LoudnessMeter.MinSampleRate || SampleRate > AudioLimits.Default.MaxSampleRate))
+            throw new ArgumentOutOfRangeException(nameof(MaxBusMeters), "Bus meters need a sample rate the loudness meter supports.");
         if (!double.IsFinite(LimiterLookaheadMilliseconds) || LimiterLookaheadMilliseconds < 0 || LimiterLookaheadMilliseconds > 100)
             throw new ArgumentOutOfRangeException(nameof(LimiterLookaheadMilliseconds));
         ResolveReservations();
@@ -360,7 +374,7 @@ public sealed partial class AudioMixer
     private enum CommandKind : byte
     {
         Play, Stop, StopAll, SetGain, SetPan, SetLoop, SetBusGain, SetPitch, SetBusMute, SetBusRoute, SetDuck, SetMasterGain,
-        SetBusFilter, SetVoiceFilter, SetBusReverb, SetLimiter,
+        SetBusFilter, SetVoiceFilter, SetBusReverb, SetLimiter, SetBusMeter,
     }
 
     private readonly int _sampleRate;
@@ -388,6 +402,12 @@ public sealed partial class AudioMixer
     private readonly bool[] _ctlReverbBusy;
     private readonly ReverbProcessor[] _reverbs;
     private readonly LimiterProcessor? _limiter;
+    private readonly MeterTap[] _meterTaps;
+    private readonly long[] _meterTickets;      // per bus (index bus + 1): meter generation << 16 | slot + 1, or 0; written under the lock, read lock-free
+    private readonly int[] _ctlMeterSlot;       // per bus (index bus + 1): the meter slot it holds, or -1
+    private readonly bool[] _ctlMeterBusy;
+    private long _ctlMeterGeneration;
+    private readonly float[] _meterScratch;
     private int _limiterGainBits = BitConverter.SingleToInt32Bits(1f);
 
     private long _nextId;
@@ -432,6 +452,13 @@ public sealed partial class AudioMixer
         _ctlReverbSlot = new int[options.MaxBuses + 1];
         Array.Fill(_ctlReverbSlot, -1);
         _ctlReverbBusy = new bool[options.MaxReverbs];
+        _meterTaps = new MeterTap[options.MaxBusMeters];
+        for (int i = 0; i < _meterTaps.Length; i++) _meterTaps[i] = new MeterTap(new LoudnessMeter(_sampleRate, _channels, _outMask, truePeak: true, loudnessRange: false), _sampleRate);
+        _meterTickets = new long[options.MaxBuses + 1];
+        _ctlMeterSlot = new int[options.MaxBuses + 1];
+        Array.Fill(_ctlMeterSlot, -1);
+        _ctlMeterBusy = new bool[options.MaxBusMeters];
+        _meterScratch = options.MaxBusMeters > 0 ? new float[_channels * _maxBlock] : [];
         if (options.LimiterLookaheadMilliseconds > 0)
         {
             int look = Math.Max(1, (int)Math.Round(options.LimiterLookaheadMilliseconds * 0.001 * _sampleRate));
@@ -849,8 +876,9 @@ public sealed partial class AudioMixer
     /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
     /// <param name="settings">The reverb's parameters.</param>
     /// <param name="rampFrames">Glide length in frames for a change to a running reverb; 0 jumps at the next pass; negative uses <see cref="MixerOptions.SmoothingMilliseconds"/>. A reverb that is just being added starts with these settings at once.</param>
-    /// <returns>False if the command queue was full, or if every reverb is in use by other buses (nothing changed).</returns>
+    /// <returns>True when queued. False only when the command queue was full (nothing changed; counted in <see cref="DroppedCommands"/>); try again later.</returns>
     /// <exception cref="ArgumentOutOfRangeException">The bus or a setting is out of range.</exception>
+    /// <exception cref="InvalidOperationException">The bus has no reverb yet and all <see cref="MixerOptions.MaxReverbs"/> reverbs are in use by other buses, or the mixer was created with none. Nothing changed. This is a configuration limit, not a transient condition, and is reported separately from a full queue so it cannot be missed; check <see cref="FreeReverbSlots"/> first or call <see cref="ClearBusReverb"/> on another bus. Retuning a bus that already has a reverb never throws this.</exception>
     public bool SetBusReverb(int bus, ReverbSettings settings, int rampFrames = -1)
     {
         CheckEffectBus(bus);
@@ -863,7 +891,8 @@ public sealed partial class AudioMixer
             if (added)
             {
                 slot = Array.IndexOf(_ctlReverbBusy, false);
-                if (slot < 0) return false;
+                if (slot < 0)
+                    throw new InvalidOperationException($"All {_ctlReverbBusy.Length} reverb slots (MixerOptions.MaxReverbs) are in use; clear the reverb of another bus or create the mixer with a higher MaxReverbs.");
             }
             if (_commands.TryEnqueue(new Command { Kind = CommandKind.SetBusReverb, Bus = bus, Aux = slot, Flag = true, Reverb = settings, Frames = rampFrames }))
             {
@@ -874,6 +903,12 @@ public sealed partial class AudioMixer
         }
         Interlocked.Increment(ref _droppedCommands);
         return false;
+    }
+
+    /// <summary>Reverbs not yet given to a bus: <see cref="MixerOptions.MaxReverbs"/> minus those set by <see cref="SetBusReverb"/> and not cleared (counted as the calls are made, not as the render thread applies them).</summary>
+    public int FreeReverbSlots
+    {
+        get { lock (_controlLock) return FreeSlots(_ctlReverbBusy); }
     }
 
     /// <summary>Removes the reverb from a bus. The tail stops at once; to fade it out, set <see cref="ReverbSettings.Wet"/> to 0 first and remove it later.</summary>
@@ -895,6 +930,133 @@ public sealed partial class AudioMixer
         }
         Interlocked.Increment(ref _droppedCommands);
         return false;
+    }
+
+    // ---------------------------------------------------------------- loudness metering
+
+    /// <summary>
+    /// Starts measuring the loudness of a bus, or of the master output, with a BS.1770 / EBU R 128 meter (<see cref="LoudnessMeter"/>,
+    /// without loudness range), without affecting any audio. Read the result with <see cref="TryGetBusLoudness"/>. A bus that is already
+    /// metered is left running (use <see cref="ResetBusMeter"/> to start over). At most <see cref="MixerOptions.MaxBusMeters"/> can run at once.
+    /// <para>
+    /// <b>Tap point.</b> A bus is measured as it leaves the bus: after its voices are summed in, after its filters and reverb and after its
+    /// bus gain and mute, before it is added into its parent (so ducking applied on the way into the parent is not included). The bus is
+    /// measured at the mixer's channel count and <see cref="MixerOptions.OutputChannelMask"/>; a bus with nothing playing is measured as
+    /// silence, so the readings decay. The master output is measured as it is delivered by <see cref="Render"/>: after master filters, reverb,
+    /// gain and the limiter, including the limiter's delay (<see cref="LatencyFrames"/>). Measuring starts at the first render pass after the
+    /// command is applied; the measurement is exact to the sample and independent of how the host splits render calls.
+    /// </para>
+    /// <para>The render thread feeds the meter and publishes a snapshot after every pass; nothing on it allocates or blocks, and a mixer with no
+    /// meter enabled does no metering work.</para>
+    /// </summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
+    /// <returns>True when queued (or already metered). False only when the command queue was full (nothing changed).</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The bus is out of range.</exception>
+    /// <exception cref="InvalidOperationException">The bus is not metered yet and all <see cref="MixerOptions.MaxBusMeters"/> meters are in use by other buses, or the mixer was created with none. Nothing changed. Like <see cref="SetBusReverb"/>, this configuration limit is reported separately from a full queue; see <see cref="FreeBusMeters"/>.</exception>
+    public bool EnableBusMeter(int bus)
+    {
+        CheckEffectBus(bus);
+        lock (_controlLock)
+        {
+            int slot = _ctlMeterSlot[bus + 1];
+            if (slot >= 0) return true;
+            slot = Array.IndexOf(_ctlMeterBusy, false);
+            if (slot < 0)
+                throw new InvalidOperationException($"All {_ctlMeterBusy.Length} bus meters (MixerOptions.MaxBusMeters) are in use; disable the meter of another bus or create the mixer with a higher MaxBusMeters.");
+            return QueueMeterStart(bus, slot);
+        }
+    }
+
+    /// <summary>Stops measuring a bus and frees its meter for another bus. <see cref="TryGetBusLoudness"/> returns false for it at once. A bus that is not metered is ignored.</summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
+    /// <returns>True when done. False if the command queue was full (the meter keeps running).</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The bus is out of range.</exception>
+    public bool DisableBusMeter(int bus)
+    {
+        CheckEffectBus(bus);
+        lock (_controlLock)
+        {
+            int slot = _ctlMeterSlot[bus + 1];
+            if (slot < 0) return true;
+            if (_commands.TryEnqueue(new Command { Kind = CommandKind.SetBusMeter, Bus = bus, Aux = slot, Flag = false }))
+            {
+                _ctlMeterSlot[bus + 1] = -1;
+                _ctlMeterBusy[slot] = false;
+                Volatile.Write(ref _meterTickets[bus + 1], 0);
+                return true;
+            }
+        }
+        Interlocked.Increment(ref _droppedCommands);
+        return false;
+    }
+
+    /// <summary>
+    /// Clears the measurement of a metered bus (filters, windows, gated history, maxima and peak) and starts again, for example at the start of a
+    /// level or a track. From this call on <see cref="TryGetBusLoudness"/> returns <see cref="LoudnessSnapshot.Empty"/> until the render thread has
+    /// measured the first pass after the reset; it never returns readings from before it. A bus that is not metered is ignored.
+    /// </summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
+    /// <returns>True when done. False if the command queue was full (nothing changed).</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The bus is out of range.</exception>
+    public bool ResetBusMeter(int bus)
+    {
+        CheckEffectBus(bus);
+        lock (_controlLock)
+        {
+            int slot = _ctlMeterSlot[bus + 1];
+            if (slot < 0) return true;
+            return QueueMeterStart(bus, slot);
+        }
+    }
+
+    // Starts or restarts the meter in 'slot' for 'bus' under a new generation. Caller holds the lock.
+    private bool QueueMeterStart(int bus, int slot)
+    {
+        long generation = _ctlMeterGeneration + 1;
+        if (_commands.TryEnqueue(new Command { Kind = CommandKind.SetBusMeter, Bus = bus, Aux = slot, Id = generation, Flag = true }))
+        {
+            _ctlMeterGeneration = generation;
+            _ctlMeterSlot[bus + 1] = slot;
+            _ctlMeterBusy[slot] = true;
+            Volatile.Write(ref _meterTickets[bus + 1], (generation << 16) | (long)(slot + 1));
+            return true;
+        }
+        Interlocked.Increment(ref _droppedCommands);
+        return false;
+    }
+
+    /// <summary>Meters not yet given to a bus: <see cref="MixerOptions.MaxBusMeters"/> minus those enabled by <see cref="EnableBusMeter"/> and not disabled.</summary>
+    public int FreeBusMeters
+    {
+        get { lock (_controlLock) return FreeSlots(_ctlMeterBusy); }
+    }
+
+    private static int FreeSlots(bool[] busy)
+    {
+        int free = 0;
+        foreach (bool b in busy) if (!b) free++;
+        return free;
+    }
+
+    /// <summary>
+    /// Reads the latest loudness of a metered bus or of the master output. Safe to call from any thread at any time, takes no lock and never
+    /// waits for the render thread beyond a few instructions; the snapshot is internally consistent (all fields from one render pass, never torn).
+    /// It reflects the audio up to the end of the most recent render pass.
+    /// </summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1, or <see cref="MasterBus"/>.</param>
+    /// <param name="loudness">The readings; <see cref="LoudnessSnapshot.Empty"/> between <see cref="EnableBusMeter"/> or <see cref="ResetBusMeter"/> and the next render pass.</param>
+    /// <returns>False if the bus has no meter enabled (<paramref name="loudness"/> is then <see cref="LoudnessSnapshot.Empty"/>).</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The bus is out of range.</exception>
+    public bool TryGetBusLoudness(int bus, out LoudnessSnapshot loudness)
+    {
+        CheckEffectBus(bus);
+        long ticket = Volatile.Read(ref _meterTickets[bus + 1]);
+        loudness = LoudnessSnapshot.Empty;
+        if (ticket == 0) return false;
+        var pub = _meterTaps[(int)(ticket & 0xFFFF) - 1].Published.Read();
+        // A slot that the render thread has not yet started for this generation still holds an older bus's readings.
+        if (pub.Generation == ticket >> 16) loudness = pub.Snapshot;
+        return true;
     }
 
     /// <summary>
