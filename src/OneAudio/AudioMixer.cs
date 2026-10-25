@@ -145,7 +145,7 @@ public sealed record MixerOptions
     /// <summary>
     /// Reverbs that may be active at once across all buses and the master output (<see cref="AudioMixer.SetBusReverb"/>). Each is built
     /// when the mixer is created and takes about 0.3 MB for stereo at 48 kHz (eight delay lines of 0.13 MB in all, plus a pre-delay line per channel of 0.2 s rounded up to a
-    /// power of two). Render cost is a few hundred nanoseconds per frame for stereo. 0 builds none. Range 0 to 16. Default 2.
+    /// power of two). 0 builds none. Range 0 to 16. Default 2.
     /// </summary>
     public int MaxReverbs { get; init; } = 2;
 
