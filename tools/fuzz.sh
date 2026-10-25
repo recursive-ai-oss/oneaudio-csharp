@@ -5,7 +5,7 @@
 #   tools/fuzz.sh run <target> [seconds] [-- <libFuzzer flags>]
 #   tools/fuzz.sh replay <target> <file>...   run saved inputs through the plain (uninstrumented) build
 #
-# <target> is the suffix of a project under fuzz/ (fuzz/OneAudio.Fuzz.<Target>), for example wav, ogg, vorbis.
+# <target> is the suffix of a project under fuzz/ (fuzz/OneAudio.Fuzz.<Target>), for example wav, ogg, vorbis, mp3.
 # Environment:
 #   ONEAUDIO_FUZZ_HOME  tools and per-target work directories (default ~/.cache/oneaudio-fuzz)
 #   ONEAUDIO_CORPUS     fetched corpus (tools/fetch-corpus.sh) used to seed the Ogg-based targets
@@ -63,6 +63,13 @@ seed() {
                    # Only the first bytes matter for header and setup coverage; whole files make runs slow.
                    find "$ONEAUDIO_CORPUS" -type f -iname '*.ogg' -size -2048k | while read -r f; do
                      head -c 65536 "$f" > "$corpus/$(basename "$f" .ogg).seed"
+                   done
+                 fi ;;
+    mp3)         find "$here/testdata" -type f -iname '*.mp3' -size -1024k -exec cp -n {} "$corpus/" \; 2>/dev/null || true
+                 if [ -n "${ONEAUDIO_CORPUS:-}" ]; then
+                   # The ISO/IEC 11172-4 streams (all block types, stereo modes, free format) and the encoder output.
+                   find "$ONEAUDIO_CORPUS" -type f \( -path '*mp3-iso-*' -iname '*.bit' -o -path '*mp3-gen*' -iname '*.mp3' \) -size -2048k | while read -r f; do
+                     head -c 65536 "$f" > "$corpus/$(basename "$f").seed"
                    done
                  fi ;;
     opus)        # The first byte picks the mode; odd means "the rest is an Ogg Opus file".
