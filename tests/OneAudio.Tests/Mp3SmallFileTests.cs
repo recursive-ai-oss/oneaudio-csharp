@@ -70,6 +70,34 @@ public class Mp3SmallFileTests
     }
 
     [Fact]
+    public void VbriHeaderGivesTheFrameCount()
+    {
+        // Rewrite the Info frame of a stereo MPEG-1 file as a VBRI frame (both sit 36 bytes into the frame): the header
+        // carries a frame count only, so the length is that many whole frames and nothing is trimmed.
+        var data = Load("small_44100_2_joint.mp3");
+        Assert.True(data.AsSpan(36, 4).SequenceEqual("Info"u8));
+        "VBRI"u8.CopyTo(data.AsSpan(36));
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(36 + 14), 7);
+        using var dec = AudioDecoder.Open(new MemoryStream(data), Mp3TestEnv.Registry);
+        Assert.Equal(7 * 1152, dec.LengthFrames);
+        Assert.Equal(7 * 1152, Mp3TestEnv.ReadAll(dec).Length / 2);
+    }
+
+    [Fact]
+    public void XingHeaderWithoutLameExtensionIsNotTrimmed()
+    {
+        // Same idea with the Xing flags set to "frame count only" and the LAME extension bytes blanked.
+        var data = Load("small_44100_2_joint.mp3");
+        "Xing"u8.CopyTo(data.AsSpan(36));
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(40), 1);   // flags: frames present
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(44), 9);   // frames
+        data.AsSpan(48, 100).Clear();
+        using var dec = AudioDecoder.Open(new MemoryStream(data), Mp3TestEnv.Registry);
+        Assert.Equal(9 * 1152, dec.LengthFrames);
+        Assert.Equal(9 * 1152, Mp3TestEnv.ReadAll(dec).Length / 2);
+    }
+
+    [Fact]
     public void ReopenedAfterSeekToStartDecodesIdentically()
     {
         var data = Load("small_44100_2_joint.mp3");
