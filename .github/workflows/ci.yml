@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      corpora:
+        description: Fetch the third-party test corpora first (without them those tests skip)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,7 +35,13 @@ jobs:
         run: dotnet restore OneAudio.slnx
       - name: Build (warnings are errors)
         run: dotnet build OneAudio.slnx -c Release --no-restore
-      - name: Test
+      - name: Fetch test corpora
+        if: ${{ inputs.corpora && runner.os != 'Windows' }}
+        shell: bash
+        run: |
+          tools/fetch-corpus.sh "$RUNNER_TEMP/corpus"
+          echo "ONEAUDIO_CORPUS=$RUNNER_TEMP/corpus" >> "$GITHUB_ENV"
+      - name: Test (tests that need corpora or reference tools skip when those are absent)
         run: dotnet test --project tests/OneAudio.Tests/OneAudio.Tests.csproj -c Release --no-build
 
   aot-smoke:
@@ -56,3 +68,16 @@ jobs:
       - name: Run the published binary
         shell: bash
         run: ./smoke-out/OneAudio.AotSmoke
+
+  pack:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Pack (warnings are errors)
+        run: dotnet pack src/OneAudio/OneAudio.csproj -c Release -o nupkg
+      - name: List package contents
+        run: unzip -l nupkg/*.nupkg

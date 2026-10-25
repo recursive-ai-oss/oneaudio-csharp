@@ -73,6 +73,9 @@ ENTRIES=(
 )
 
 mkdir -p "$cache/_dl"
+# macOS ships shasum rather than sha256sum.
+check_sha() { if command -v sha256sum >/dev/null; then sha256sum -c -; else shasum -a 256 -c -; fi; }
+
 for entry in "${ENTRIES[@]}"; do
   IFS='|' read -r name url sha kind <<<"$entry"
   if [ ${#wanted[@]} -gt 0 ] && [[ ! " ${wanted[*]} " == *" $name "* ]]; then continue; fi
@@ -80,7 +83,7 @@ for entry in "${ENTRIES[@]}"; do
   if [ -e "$dest/.verified" ] && [ "$(cat "$dest/.verified")" = "$sha" ]; then echo "$name: up to date"; continue; fi
   file="$cache/_dl/$(basename "$url")"
   [ -f "$file" ] || curl -fL --retry 3 -o "$file" "$url"
-  echo "$sha  $file" | sha256sum -c - >/dev/null || { echo "$name: SHA-256 mismatch for $file" >&2; rm -f "$file"; exit 1; }
+  echo "$sha  $file" | check_sha >/dev/null || { echo "$name: SHA-256 mismatch for $file" >&2; rm -f "$file"; exit 1; }
   rm -rf "$dest"; mkdir -p "$dest"
   case "$kind" in
     tgz) tar -xzf "$file" -C "$dest" ;;
