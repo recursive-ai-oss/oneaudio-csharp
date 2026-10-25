@@ -158,7 +158,8 @@ public sealed class VorbisDecoder : IAudioDecoder
     /// first audio page a granule position different from the audio decoded up to it (Ogg Vorbis mapping, appendix
     /// A.2): smaller means "the first samples lie before time zero, drop them" (sample-accurate cutting), larger
     /// means the stream starts at a later time. The block sizes of the packets up to that page give the decoded count
-    /// without decoding anything. The scan gives up after 10000 packets without a position and returns 0.
+    /// without decoding anything. A position found on the page that ends the stream is the end trim of appendix A.2 and
+    /// gives 0. The scan gives up after 10000 packets without a position and returns 0.
     /// </summary>
     private static long ScanOffset(OggPacketSource ogg, VorbisSetup setup)
     {
@@ -171,7 +172,12 @@ public sealed class VorbisDecoder : IAudioDecoder
             if (n == 0) continue;
             if (prev != 0) decoded += prev / 4 + n / 4;
             prev = n;
-            if (p.EndFrame >= 0) return p.EndFrame - decoded;
+            if (p.EndFrame >= 0)
+            {
+                // A position on the page that ends the stream is the end trim, not a start offset: a short stream
+                // that fits on one page has it as its only position, and its packets decode to more than that.
+                return ogg.PacketEndsStream ? 0 : p.EndFrame - decoded;
+            }
         }
         return 0;
     }
