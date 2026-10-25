@@ -186,6 +186,16 @@ public sealed class OpusEncoder
             throw new ArgumentException("frameSize must be 120, 240, 480, 960, 1920 or 2880.", nameof(frameSize));
     }
 
+    /// <summary>
+    /// Encodes a packet in the self-delimited framing of RFC 6716 appendix B, used for all but the last stream of a
+    /// multistream packet. <paramref name="packet"/> needs two bytes more than the size limit.
+    /// </summary>
+    internal int EncodeSelfDelimited(ReadOnlySpan<float> pcm, int frameSize, Span<byte> packet, int maxBytes)
+    {
+        CheckFrame(frameSize);
+        return EncodeNative(pcm, frameSize, packet, Math.Min(maxBytes, 1276), false, true);
+    }
+
     // ------------------------------------------------------------------------------------------------
 
     private static int Lin2Log(int inLin)
@@ -279,7 +289,7 @@ public sealed class OpusEncoder
         _ => 21,
     };
 
-    private int EncodeNative(ReadOnlySpan<float> pcm, int frameSize, Span<byte> data, int maxDataBytes, bool inner)
+    private int EncodeNative(ReadOnlySpan<float> pcm, int frameSize, Span<byte> data, int maxDataBytes, bool inner, bool selfDelimited = false)
     {
         maxDataBytes = Math.Min(maxDataBytes, 1276);
         _rangeFinal = 0;
@@ -381,9 +391,9 @@ public sealed class OpusEncoder
             }
             _userBandwidth = bakBandwidth;
             _forceChannels = bakChannels;
-            int ret = Pack(nbFrames, data, maxDataBytes);
+            int ret = Pack(nbFrames, data, selfDelimited ? data.Length : maxDataBytes, selfDelimited);
             if (ret < 0) return -1;
-            if (!useVbr && ret >= 3 && !inner)
+            if (!useVbr && ret >= 3 && !inner && !selfDelimited)
             {
                 if (PadFrame(data, ret, maxDataBytes)) return -1;
                 ret = maxDataBytes;
@@ -451,6 +461,14 @@ public sealed class OpusEncoder
             _rangeFinal = 0;
         }
         result += 1;
+        if (selfDelimited)
+        {
+            int frameLen = result - 1;
+            int sb = frameLen >= 252 ? 2 : 1;
+            data.Slice(1, frameLen).CopyTo(data.Slice(1 + sb));
+            EncodeSize(frameLen, data.Slice(1));
+            return result + sb;
+        }
         if (!useVbr && result >= 3 && !inner)
         {
             if (PadFrame(data, result, maxDataBytes)) return -1;
@@ -460,23 +478,23 @@ public sealed class OpusEncoder
     }
 
     // Packs the frames in _subFrames as one packet (opus_repacketizer_out).
-    private int Pack(int count, Span<byte> data, int maxLen)
+    private int Pack(int count, Span<byte> data, int maxLen, bool selfDelimited)
     {
         // Every frame has its own TOC byte first; the configuration of the first one is the packet's.
         int toc = _subFrames[0];
-        int total = 0;
+        int total = selfDelimited ? 1 + (_subLen[count - 1] - 1 >= 252 ? 1 : 0) : 0;
         Span<int> len = stackalloc int[3];
         for (int i = 0; i < count; i++) len[i] = _subLen[i] - 1;
         int pos = 0;
         switch (count)
         {
             case 2 when len[0] == len[1]:
-                total = 2 * len[0] + 1;
+                total += 2 * len[0] + 1;
                 if (total > maxLen) return -1;
                 data[pos++] = (byte)((toc & 0xFC) | 0x1);
                 break;
             case 2:
-                total = len[0] + len[1] + 2 + (len[0] >= 252 ? 1 : 0);
+                total += len[0] + len[1] + 2 + (len[0] >= 252 ? 1 : 0);
                 if (total > maxLen) return -1;
                 data[pos++] = (byte)((toc & 0xFC) | 0x2);
                 pos += EncodeSize(len[0], data.Slice(pos));
@@ -488,7 +506,7 @@ public sealed class OpusEncoder
                     if (len[i] != len[0]) vbr = true;
                 if (vbr)
                 {
-                    total = 2;
+                    total += 2;
                     for (int i = 0; i < count - 1; i++) total += 1 + (len[i] >= 252 ? 1 : 0) + len[i];
                     total += len[count - 1];
                     if (total > maxLen) return -1;
@@ -498,7 +516,7 @@ public sealed class OpusEncoder
                 }
                 else
                 {
-                    total = count * len[0] + 2;
+                    total += count * len[0] + 2;
                     if (total > maxLen) return -1;
                     data[pos++] = (byte)((toc & 0xFC) | 0x3);
                     data[pos++] = (byte)count;
@@ -506,6 +524,7 @@ public sealed class OpusEncoder
                 break;
             }
         }
+        if (selfDelimited) pos += EncodeSize(len[count - 1], data.Slice(pos));
         for (int i = 0; i < count; i++)
         {
             _subFrames.AsSpan(i * 1280 + 1, len[i]).CopyTo(data.Slice(pos));
