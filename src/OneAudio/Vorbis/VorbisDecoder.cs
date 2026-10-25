@@ -39,7 +39,8 @@ public sealed class VorbisCodec : IAudioCodec
 /// <b>Chained files.</b> A chain is a series of independent Vorbis streams ("links"). Consecutive links with the
 /// same sample rate and channel count are played as one continuous stream. A link with a different format ends
 /// the stream at that point, because <see cref="Format"/> cannot change while reading; use <see cref="LinkCount"/>,
-/// <see cref="GetLinkFormat"/> and <see cref="SelectRun"/> to reach the others.
+/// <see cref="GetLinkFormat"/> and <see cref="SelectRun"/> to reach the others. <see cref="LengthFrames"/> is the
+/// length of the run being played. <see cref="OneAudio.Opus.OpusStreamDecoder"/> follows the same rules.
 /// </para>
 /// <para>
 /// <b>Seeking</b> is sample-accurate: the decoder finds a page at or before the target through the container, decodes
@@ -367,9 +368,13 @@ public sealed class VorbisDecoder : IAudioDecoder
     {
         var d = first.Data;
         if (d.Length < 7 || d[0] != 1) return true; // a stray comment or setup header: nothing to do
+        // The container numbers links from its own table. A second identification header that arrives while the
+        // link is unchanged belongs to a damaged file, not to a chain: ignore it rather than restart the decoder.
+        if (_ogg is not null && _ogg.CurrentLink == _activeLink) return true;
         VorbisSetup setup;
         try { setup = VorbisSetup.ParseIdentification(d, _limits); }
         catch (UnsupportedAudioFormatException) { return false; }
+        // A different format ends the stream: Format cannot change while reading (see SelectRun).
         if (FormatOf(setup) != _format) return false;
         ReadRemainingHeaders(_packets, setup, _limits);
         _setup = setup;

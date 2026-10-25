@@ -65,6 +65,9 @@ ENTRIES=(
   "mp3-iso-si_huff-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/si_huff.pcm|468cd5d833fa3e017300128d3a80126412e6d77bdbdcca9e97abace6752cc0be|raw"
   "mp3-iso-sin1k0db-bit|https://fate-suite.ffmpeg.org/mp3-conformance/sin1k0db.bit|64775e23c29aa84e27f68777460f88e0717af2ed64e732d287a20c5a92c9fa3e|raw"
   "mp3-iso-sin1k0db-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/sin1k0db.pcm|4a31caa4ec395b4f4c8efbb1b7fe739f7390a83b78320d078ef53bcb84939e63|raw"
+  # EBU loudness test set v05 (Tech 3341 / 3342 minimum-requirement signals). The EBU site refuses some networks (HTTP 403 from its CDN),
+  # so this pins the Internet Archive's copy of https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip; the SHA-256 is that of the EBU file.
+  "ebu-loudness-v05|https://web.archive.org/web/20170331172519id_/https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip|9cc500b4df83f7c21855c74dce795ef5209a752bf884253ae57d0ce512efb062|zip"
 )
 
 mkdir -p "$cache/_dl"

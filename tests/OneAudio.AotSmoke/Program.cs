@@ -104,6 +104,19 @@ foreach (var q in new[] { ResamplerQuality.Linear, ResamplerQuality.Polyphase, R
     if (!fast.IsValid || !bent.IsValid || peak < 0.2f || mr.DroppedConverterRequests != 0) return Fail($"converted voices (peak {peak})");
 }
 
+if (VorbisSmoke.Run() != 0) return 1;
+
+// Loudness: a -20 dBFS stereo tone must read about -20 LUFS, and the normalisation gain follows from it.
+{
+    var lm = new OneAudio.Loudness.LoudnessMeter(Rate, 2);
+    var lb = new float[Rate * 2 * 5];
+    for (int i = 0; i < Rate * 5; i++) lb[2 * i] = lb[2 * i + 1] = 0.1f * MathF.Sin(2 * MathF.PI * 1000 * i / Rate);
+    lm.Process(lb);
+    double li = lm.IntegratedLufs;
+    var lg = OneAudio.Loudness.LoudnessNormalization.ComputeGain(li, lm.TruePeakDbtp);
+    if (li < -20.1 || li > -19.9 || lg.GainDb > -2.8 || lg.GainDb < -3.2) return Fail($"loudness ({li}, {lg.GainDb})");
+}
+
 // Opus: every mode through the packet decoder (random payloads are valid Opus), plus codec registration.
 var opusRegistry = new AudioCodecRegistry().AddOgg().AddOpus();
 if (opusRegistry.GetCodec(CodecId.Opus).Id != CodecId.Opus) return Fail("opus registration");
