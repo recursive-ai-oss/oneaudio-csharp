@@ -29,7 +29,7 @@ internal static class FlacFixtures
     /// Ogg FLAC mapping: an identification packet, the remaining metadata blocks, then audio with the sample count
     /// after each frame as the granule position.
     /// </summary>
-    public static byte[] ToOgg(byte[] flac, int maxBody = 4000)
+    public static byte[] ToOgg(byte[] flac, int maxBody = 4000, uint serial = 0x464C4143)
     {
         int pos = 4;
         var blocks = new List<byte[]>();
@@ -71,6 +71,6 @@ internal static class FlacFixtures
             granules.Add(samples);
             pos += used;
         }
-        return new OggBuilder().AddStream(0x464C4143, packets, granules, maxBody, new HashSet<int> { lastHeader }).ToArray();
+        return new OggBuilder().AddStream(serial, packets, granules, maxBody, new HashSet<int> { lastHeader }).ToArray();
     }
 }

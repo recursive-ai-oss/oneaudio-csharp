@@ -19,6 +19,10 @@ Everything is in namespace `OneAudio`. Units: a **frame** is one sample per chan
 
 `AudioDecoder.Open(Stream, AudioCodecRegistry, AudioLimits?, leaveOpen, CancellationToken)` detects the container from the first 512 bytes and returns a decoder; `OpenFile` does the same for a path. Non-seekable streams are supported through a replay buffer.
 
+### FLAC
+
+`new AudioCodecRegistry().AddOgg().AddFlac()` opens `.flac` files and Ogg FLAC. `ReadInteger` returns the stream's exact samples left-shifted to the whole-byte container width in `Format.BitsPerSample` (a 12-bit stream reads as 16-bit values); `Read` scales by the stream's own depth, so full scale is +-1. The concrete `FlacDecoder` adds `BitsPerSample` (true depth), `Vendor`/`Comments`, `Md5` and `VerifyMd5()` (decodes the whole file and compares with the STREAMINFO signature; the position is restored). Frames are CRC-checked; a frame that changes the format mid-stream, or contradicts STREAMINFO (block size, frame size, sample count), is rejected with `AudioFormatException` after the earlier frames have been delivered. Chained Ogg FLAC follows the same run semantics as Vorbis and Opus (`LinkCount`, `GetLinkFormat`, `SelectRun`).
+
 ## Containers, codecs, registration
 
 - `IContainerFormat` recognises a format (`Matches`) and opens it. Containers that carry compressed packets expose them as an `IPacketSource` (`TryReadPacket`, `SeekToFrame`, `LengthFrames`) and look up the codec by `CodecId` in the registry. Raw-PCM containers (WAV) decode directly.

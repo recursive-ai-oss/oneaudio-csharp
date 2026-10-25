@@ -14,18 +14,32 @@ internal enum FlacFrameStatus { Ok, NeedMore }
 /// </summary>
 internal sealed class FlacFrameDecoder
 {
-    private readonly FlacStreamInfo _si;
+    private FlacStreamInfo _si;
+    private readonly int _capacity;
     private readonly int[] _coef = new int[32];
     private readonly int[] _coefRev = new int[32];
     private long[]? _wideA, _wideB;
     private int[]? _wideRes;
     private string _error = "";
 
-    public FlacFrameDecoder(FlacStreamInfo si)
+    /// <param name="si">The stream the frames belong to.</param>
+    /// <param name="blockCapacity">Largest block size the buffers must hold; at least <c>si.MaxBlockSize</c>. A chained stream passes the largest of its links so one decoder serves all of them.</param>
+    public FlacFrameDecoder(FlacStreamInfo si, int blockCapacity = 0)
     {
         _si = si;
+        _capacity = Math.Max(blockCapacity, si.MaxBlockSize);
         Channels = new int[si.Channels][];
-        for (int c = 0; c < Channels.Length; c++) Channels[c] = new int[si.MaxBlockSize];
+        for (int c = 0; c < Channels.Length; c++) Channels[c] = new int[_capacity];
+    }
+
+    /// <summary>Largest block size the buffers hold.</summary>
+    public int Capacity => _capacity;
+
+    /// <summary>Switches to another stream with the same channel count whose block size fits the buffers (a later link of a chain).</summary>
+    public void SetStreamInfo(FlacStreamInfo si)
+    {
+        if (si.Channels != Channels.Length || si.MaxBlockSize > _capacity) throw new ArgumentException("Stream does not fit this decoder's buffers.", nameof(si));
+        _si = si;
     }
 
     /// <summary>Decoded samples of the last frame, one array per channel; the first <c>BlockSize</c> entries are valid.</summary>
@@ -285,9 +299,9 @@ internal sealed class FlacFrameDecoder
 
     private bool DecodeWideStereo(ref FlacBitReader br, int n, int ca)
     {
-        _wideA ??= new long[_si.MaxBlockSize];
-        _wideB ??= new long[_si.MaxBlockSize];
-        _wideRes ??= new int[_si.MaxBlockSize];
+        _wideA ??= new long[_capacity];
+        _wideB ??= new long[_capacity];
+        _wideRes ??= new int[_capacity];
         var a = _wideA.AsSpan(0, n);
         var b = _wideB.AsSpan(0, n);
         if (!DecodeSubframeWide(ref br, a, ca == 9 ? 33 : 32)) return false;

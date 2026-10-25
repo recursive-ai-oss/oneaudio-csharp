@@ -155,6 +155,94 @@ public class FlacSeekTests
     }
 }
 
+public class FlacChainTests
+{
+    private static byte[] Chain(params (string Name, uint Serial)[] links)
+    {
+        var all = new List<byte>();
+        foreach (var (name, serial) in links) all.AddRange(FlacFixtures.ToOgg(FlacFixtures.Bytes(name), 3000, serial));
+        return [.. all];
+    }
+
+    private static int[] Native(string name)
+    {
+        using var d = FlacFixtures.Open(FlacFixtures.Bytes(name));
+        return FlacFixtures.DecodeAll(d);
+    }
+
+    [Fact]
+    public void SameFormatLinks_PlayAsOneStream_AndFormatChangeEndsIt()
+    {
+        var ogg = Chain(("stereo16_midside_small", 1), ("stereo16_midside_small", 2), ("mono8", 3), ("stereo16_midside_small", 4));
+        var one = Native("stereo16_midside_small");
+        using var d = (OneAudio.Flac.FlacDecoder)AudioDecoder.Open(new MemoryStream(ogg), FlacTestEnv.Registry);
+        Assert.Equal(4, d.LinkCount);
+        Assert.Equal(2, d.GetLinkFormat(0)!.Value.Channels);
+        Assert.Equal(1, d.GetLinkFormat(2)!.Value.Channels);
+        Assert.Equal(one.Length / 2 * 2, d.LengthFrames);
+        Assert.Equal([.. one, .. one], FlacFixtures.DecodeAll(d)); // stops at the mono link
+        Assert.Equal(d.LengthFrames, d.PositionFrames);
+    }
+
+    [Fact]
+    public void SelectRun_ReachesOtherRuns()
+    {
+        var ogg = Chain(("stereo16_midside_small", 1), ("mono8", 2), ("mono8", 3), ("stereo16_midside_small", 4));
+        using var d = (OneAudio.Flac.FlacDecoder)AudioDecoder.Open(new MemoryStream(ogg), FlacTestEnv.Registry);
+        var mono = Native("mono8");
+        d.SelectRun(2);
+        Assert.Equal(1, d.Format.Channels);
+        Assert.Equal(NativeSampleType.PcmUnsigned8, d.Format.NativeType);
+        Assert.Equal(mono.Length * 2, d.LengthFrames);
+        Assert.Equal([.. mono, .. mono], FlacFixtures.DecodeAll(d));
+        d.SelectRun(3);
+        Assert.Equal(2, d.Format.Channels);
+        Assert.Equal(Native("stereo16_midside_small"), FlacFixtures.DecodeAll(d));
+        d.SelectRun(0);
+        Assert.Equal(Native("stereo16_midside_small"), FlacFixtures.DecodeAll(d));
+        Assert.Throws<ArgumentOutOfRangeException>(() => d.SelectRun(9));
+    }
+
+    [Fact]
+    public void Seeking_IsExact_AcrossLinksOfARun()
+    {
+        var ogg = Chain(("stereo16_midside_small", 1), ("stereo16_midside_small", 2), ("stereo16_midside_small", 3), ("mono8", 4));
+        FlacSeekTests.CheckSeeks(() => AudioDecoder.Open(new MemoryStream(ogg), FlacTestEnv.Registry), 21, 60);
+        // Targets on the link boundaries themselves.
+        using var d = AudioDecoder.Open(new MemoryStream(ogg), FlacTestEnv.Registry);
+        var all = FlacFixtures.DecodeAll(d);
+        long link = Native("stereo16_midside_small").Length / 2;
+        var buf = new int[2 * 50];
+        foreach (long t in new[] { link - 1, link, link + 1, 2 * link - 1, 2 * link, 3 * link - 25 })
+        {
+            d.Seek(t);
+            int n = d.ReadInteger(buf);
+            Assert.True(all.AsSpan((int)t * 2, n * 2).SequenceEqual(buf.AsSpan(0, n * 2)), $"boundary {t}");
+        }
+    }
+
+    [Fact]
+    public void BlockSizesDifferingBetweenLinks_ShareOneFrameDecoder()
+    {
+        var ogg = Chain(("stereo16_midside_small", 1), ("stereo16_noseektable", 2), ("stereo16_midside_small", 3));
+        var want = new List<int>();
+        foreach (var n in new[] { "stereo16_midside_small", "stereo16_noseektable", "stereo16_midside_small" }) want.AddRange(Native(n));
+        using var d = AudioDecoder.Open(new MemoryStream(ogg), FlacTestEnv.Registry);
+        Assert.Equal(want, FlacFixtures.DecodeAll(d));
+        FlacSeekTests.CheckSeeks(() => AudioDecoder.Open(new MemoryStream(ogg), FlacTestEnv.Registry), 5, 40);
+    }
+
+    [Fact]
+    public void NonSeekable_PlaysSameFormatLinks_AndStopsAtAFormatChange()
+    {
+        var ogg = Chain(("stereo16_midside_small", 1), ("stereo16_midside_small", 2), ("mono8", 3));
+        var one = Native("stereo16_midside_small");
+        using var d = AudioDecoder.Open(new NonSeekableStream(ogg), FlacTestEnv.Registry);
+        Assert.False(d.CanSeek);
+        Assert.Equal([.. one, .. one], FlacFixtures.DecodeAll(d));
+    }
+}
+
 /// <summary>Seeking on the corpus: files with and without a SEEKTABLE, fixed and variable block sizes, odd depths and channel counts.</summary>
 public class FlacCorpusSeekTests
 {

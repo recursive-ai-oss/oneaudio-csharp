@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using OneAudio.Ogg;
 using System.Text;
 
 namespace OneAudio.Flac;
@@ -29,6 +30,12 @@ namespace OneAudio.Flac;
 /// being buffered; a SEEKTABLE or VORBIS_COMMENT block larger than <see cref="AudioLimits.MaxMetadataBytes"/> is skipped too.
 /// </para>
 /// <para>
+/// <b>Chained Ogg FLAC.</b> Consecutive links with the same format play as one stream; a link with a different format ends
+/// the stream at that point, because <see cref="Format"/> cannot change while reading. On a seekable stream
+/// <see cref="LinkCount"/>, <see cref="GetLinkFormat"/> and <see cref="SelectRun"/> reach the other runs, <see cref="LengthFrames"/> is the
+/// length of the current run (from the Ogg granule positions), and seeking is exact across its links.
+/// </para>
+/// <para>
 /// <b>Seeking</b> is sample-accurate. With a SEEKTABLE the decoder jumps to the closest earlier point; without one (or
 /// when the table does not match the file) it bisects the file for frame headers, validating each candidate with the
 /// header CRC-8 and a full frame decode, which needs a known sample count. With an unknown count it decodes forward from
@@ -37,18 +44,27 @@ namespace OneAudio.Flac;
 /// </summary>
 public sealed class FlacDecoder : IAudioDecoder
 {
-    private readonly FlacStreamInfo _si;
-    private readonly FlacFrameDecoder _fd;
-    private readonly AudioFormat _format;
-    private readonly float _scale;
-    private readonly int _shift;
+    private FlacStreamInfo _si;
+    private FlacFrameDecoder _fd;
+    private AudioFormat _format;
+    private float _scale;
+    private int _shift;
     private readonly IPacketSource? _packets;
+    private readonly OggPacketSource? _ogg;
     private readonly Stream? _stream;
     private readonly bool _leaveOpen;
     private readonly AudioLimits _limits;
     private readonly List<string> _comments = [];
     private string? _vendor;
     private bool _haveComments;
+
+    // Chained Ogg FLAC (seekable source only): the STREAMINFO of every link (null when a link's headers are unusable) and the
+    // run of consecutive same-format links being played. _linkBase is the run-relative frame at which the current link begins.
+    private FlacStreamInfo?[]? _linkSi;
+    private long[] _runStarts = [0];
+    private int _runStart, _runEnd;
+    private long _runLength = -1;
+    private long _linkBase;
 
     // Stream mode state.
     private StreamReaderState? _io;
@@ -70,15 +86,31 @@ public sealed class FlacDecoder : IAudioDecoder
         _si = si;
         _limits = limits;
         _packets = packets;
+        _ogg = packets as OggPacketSource;
         _stream = stream;
         _leaveOpen = leaveOpen;
         _fd = new FlacFrameDecoder(si);
-        int width = (si.BitsPerSample + 7) / 8 * 8;
-        _shift = width - si.BitsPerSample;
-        _scale = 1f / (1L << (si.BitsPerSample - 1));
-        var type = width switch { 8 => NativeSampleType.PcmUnsigned8, 16 => NativeSampleType.PcmSigned16, 24 => NativeSampleType.PcmSigned24, _ => NativeSampleType.PcmSigned32 };
-        _format = new AudioFormat(si.SampleRate, si.Channels, MaskFor(si.Channels), type, width);
+        ApplyStreamInfo(si);
     }
+
+    private void ApplyStreamInfo(FlacStreamInfo si)
+    {
+        _si = si;
+        _format = FormatOf(si);
+        _shift = _format.BitsPerSample - si.BitsPerSample;
+        _scale = 1f / (1L << (si.BitsPerSample - 1));
+    }
+
+    private static AudioFormat FormatOf(FlacStreamInfo si)
+    {
+        int width = (si.BitsPerSample + 7) / 8 * 8;
+        var type = width switch { 8 => NativeSampleType.PcmUnsigned8, 16 => NativeSampleType.PcmSigned16, 24 => NativeSampleType.PcmSigned24, _ => NativeSampleType.PcmSigned32 };
+        return new AudioFormat(si.SampleRate, si.Channels, MaskFor(si.Channels), type, width);
+    }
+
+    /// <summary>Links play as one stream only when everything a reader sees (format, and the true bit depth behind the scaling) matches.</summary>
+    private static bool SameFormat(FlacStreamInfo? a, FlacStreamInfo? b) =>
+        a is not null && b is not null && a.BitsPerSample == b.BitsPerSample && FormatOf(a) == FormatOf(b);
 
     private static ChannelMask MaskFor(int channels) => channels switch
     {
@@ -95,7 +127,7 @@ public sealed class FlacDecoder : IAudioDecoder
     public int BitsPerSample => _si.BitsPerSample;
 
     /// <inheritdoc />
-    public long LengthFrames => _si.TotalSamples > 0 ? _si.TotalSamples : Math.Max(_packets?.LengthFrames ?? -1, -1);
+    public long LengthFrames => _runLength >= 0 ? _runLength : _si.TotalSamples > 0 ? _si.TotalSamples : Math.Max(_packets?.LengthFrames ?? -1, -1);
 
     /// <inheritdoc />
     public long PositionFrames => _blockStart + _blockPos;
@@ -140,29 +172,143 @@ public sealed class FlacDecoder : IAudioDecoder
     /// <summary>Opens FLAC packets from a container (Ogg FLAC): the mapping header, then one frame per packet.</summary>
     internal static FlacDecoder Create(IPacketSource packets, AudioLimits limits)
     {
-        if (!packets.TryReadPacket(out var first) || first.Data.Length < 51)
-            throw new AudioFormatException("Missing or truncated Ogg FLAC identification header.");
-        var d = first.Data;
+        if (!packets.TryReadPacket(out var first)) throw new AudioFormatException("Missing Ogg FLAC identification header.");
+        var si = ParseIdentification(first.Data, limits, out int headerPackets);
+        var dec = new FlacDecoder(si, limits, packets, null, false);
+        dec.ReadMetadataPackets(headerPackets, readComments: true);
+        if (dec._ogg is { CanSeek: true } ogg)
+        {
+            // Learn every link's format from its headers so runs of identical links can be played through and seeks can cross them.
+            var table = new FlacStreamInfo?[ogg.LinkCount];
+            table[0] = si;
+            for (int i = 1; i < table.Length; i++)
+            {
+                ogg.SeekToLink(i);
+                try
+                {
+                    if (!ogg.TryReadPacket(out var p) || !p.IsHeader) continue;
+                    table[i] = ParseIdentification(p.Data, limits, out int n);
+                }
+                catch (AudioFormatException) { table[i] = null; }
+            }
+            // Back to the first link, past its headers.
+            ogg.SeekToLink(0);
+            if (!ogg.TryReadPacket(out _)) throw new AudioFormatException("Ogg FLAC stream is truncated.");
+            for (int i = 0; i < headerPackets; i++)
+                if (!ogg.TryReadPacket(out _)) throw new AudioFormatException("Ogg FLAC stream is truncated.");
+            dec._linkSi = table;
+            dec.SelectRunCore(0);
+        }
+        return dec;
+    }
+
+    /// <summary>Parses an Ogg FLAC identification packet (the mapping's first packet of a link).</summary>
+    private static FlacStreamInfo ParseIdentification(ReadOnlySpan<byte> d, AudioLimits limits, out int headerPackets)
+    {
+        if (d.Length < 51) throw new AudioFormatException("Missing or truncated Ogg FLAC identification header.");
         // Ogg FLAC mapping: 0x7F "FLAC", major, minor, big-endian header packet count, then "fLaC" and STREAMINFO's block header.
         if (d[0] != 0x7F || !d.Slice(1, 4).SequenceEqual("FLAC"u8) || !d.Slice(9, 4).SequenceEqual("fLaC"u8))
             throw new AudioFormatException("Not an Ogg FLAC identification header.");
         if (d[5] != 1) throw new UnsupportedAudioFormatException("Unsupported Ogg FLAC mapping version.");
-        int headerPackets = (d[7] << 8) | d[8];
+        headerPackets = (d[7] << 8) | d[8];
         if ((d[13] & 0x7F) != 0 || ((d[14] << 16) | (d[15] << 8) | d[16]) != FlacStreamInfo.Size)
             throw new AudioFormatException("Ogg FLAC header does not start with STREAMINFO.");
-        var si = FlacStreamInfo.Parse(d.Slice(17, FlacStreamInfo.Size), limits);
-        var dec = new FlacDecoder(si, limits, packets, null, false);
         limits.CheckContainerElements(headerPackets);
-        for (int i = 0; i < headerPackets; i++)
+        return FlacStreamInfo.Parse(d.Slice(17, FlacStreamInfo.Size), limits);
+    }
+
+    /// <summary>Reads the metadata packets that follow an identification packet; the first link's comments are kept.</summary>
+    private void ReadMetadataPackets(int count, bool readComments)
+    {
+        for (int i = 0; i < count; i++)
         {
-            if (!packets.TryReadPacket(out var p)) throw new AudioFormatException("Ogg FLAC stream ends inside its headers.");
+            if (!_packets!.TryReadPacket(out var p)) throw new AudioFormatException("Ogg FLAC stream ends inside its headers.");
             if (p.Data.Length < 4) throw new AudioFormatException("Truncated FLAC metadata packet.");
             int type = p.Data[0] & 0x7F;
             int len = (p.Data[1] << 16) | (p.Data[2] << 8) | p.Data[3];
             if (len != p.Data.Length - 4) throw new AudioFormatException("FLAC metadata packet length mismatch.");
-            if (type == 4 && !dec._haveComments && len <= limits.MaxMetadataBytes) dec.ParseVorbisComment(p.Data[4..]);
+            if (readComments && type == 4 && !_haveComments && len <= _limits.MaxMetadataBytes) ParseVorbisComment(p.Data[4..]);
         }
-        return dec;
+    }
+
+    // ---- Chains (Ogg FLAC) ----------------------------------------------------------------------------
+
+    /// <summary>The number of links (independent streams) in the file; 1 unless the file is a chained Ogg FLAC on a seekable stream.</summary>
+    public int LinkCount => _linkSi?.Length ?? 1;
+
+    /// <summary>Format of a link, or null when its headers are unusable.</summary>
+    /// <param name="link">0 to <see cref="LinkCount"/> - 1.</param>
+    public AudioFormat? GetLinkFormat(int link)
+    {
+        if (_linkSi is null)
+        {
+            ArgumentOutOfRangeException.ThrowIfNotEqual(link, 0);
+            return _format;
+        }
+        return _linkSi[link] is { } si ? FormatOf(si) : null;
+    }
+
+    /// <summary>
+    /// Switches to the run of consecutive same-format links that contains <paramref name="link"/> and repositions at its start.
+    /// <see cref="Format"/>, <see cref="LengthFrames"/> and <see cref="PositionFrames"/> then describe that run.
+    /// </summary>
+    /// <param name="link">0 to <see cref="LinkCount"/> - 1.</param>
+    /// <exception cref="NotSupportedException">The source is not a seekable chained Ogg FLAC.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The link does not exist or its headers are unusable.</exception>
+    public void SelectRun(int link)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_linkSi is null) throw new NotSupportedException("Runs exist only in seekable Ogg FLAC streams.");
+        if ((uint)link >= (uint)_linkSi.Length || _linkSi[link] is null) throw new ArgumentOutOfRangeException(nameof(link));
+        SelectRunCore(link);
+        SeekCore(0);
+    }
+
+    private void SelectRunCore(int link)
+    {
+        var table = _linkSi!;
+        var key = table[link];
+        int s = link, e = link;
+        while (s > 0 && SameFormat(table[s - 1], key)) s--;
+        while (e + 1 < table.Length && SameFormat(table[e + 1], key)) e++;
+        _runStart = s;
+        _runEnd = e;
+        _runStarts = new long[e - s + 1];
+        long cum = 0;
+        int capacity = 0;
+        for (int i = s; i <= e; i++)
+        {
+            _runStarts[i - s] = cum;
+            cum += Math.Max(0, _ogg!.GetLink(i).LengthFrames);
+            capacity = Math.Max(capacity, table[i]!.MaxBlockSize);
+        }
+        _runLength = cum;
+        UseLink(table[s]!, capacity);
+    }
+
+    /// <summary>Makes <paramref name="si"/> the stream being decoded, keeping the frame buffers when they fit.</summary>
+    private void UseLink(FlacStreamInfo si, int capacity)
+    {
+        ApplyStreamInfo(si);
+        if (_fd.Capacity >= Math.Max(capacity, si.MaxBlockSize) && _fd.Channels.Length == si.Channels) _fd.SetStreamInfo(si);
+        else _fd = new FlacFrameDecoder(si, capacity);
+    }
+
+    /// <summary>
+    /// A header packet in the middle of a stream starts the next link. Returns false when its format differs, which ends the
+    /// stream (<see cref="Format"/> cannot change while reading; <see cref="SelectRun"/> reaches other runs).
+    /// </summary>
+    private bool StartLink(ReadOnlySpan<byte> identification, long runPosition)
+    {
+        var si = ParseIdentification(identification, _limits, out int headers);
+        ReadMetadataPackets(headers, readComments: false);
+        if (!SameFormat(si, _si)) return false;
+        UseLink(si, _fd.Capacity);
+        // Seekable sources know each link's place in the run; otherwise links follow each other without gaps.
+        int link = _ogg?.CurrentLink ?? 0;
+        _linkBase = _linkSi is not null && link >= _runStart && link <= _runEnd ? _runStarts[link - _runStart] : runPosition;
+        _blockStart = _linkBase;
+        return true;
     }
 
     internal static FlacDecoder OpenStream(StreamReaderState io, AudioLimits limits, bool leaveOpen, CancellationToken ct)
@@ -320,36 +466,49 @@ public sealed class FlacDecoder : IAudioDecoder
         _blockStart = start;
         _blockLen = 0;
         _blockPos = 0;
-        long total = _si.TotalSamples;
         if (_ended) return false;
-        if (total > 0 && start >= total && !_positionFromHeader) { _ended = true; return false; }
 
-        FlacFrameHeader h;
+        FlacFrameHeader h = default;
         int used = 0;
-        bool got;
         if (_packets is not null)
         {
-            got = _packets.TryReadPacket(out var pkt);
-            h = default;
-            if (got && _fd.Decode(pkt.Data, out h, out used) == FlacFrameStatus.NeedMore)
-                throw new AudioFormatException("Truncated FLAC frame.");
+            while (true)
+            {
+                if (!_packets.TryReadPacket(out var pkt)) { _ended = true; return false; }
+                if (pkt.IsHeader)
+                {
+                    if (!StartLink(pkt.Data, start)) { _ended = true; return false; }
+                    start = _blockStart;
+                    continue;
+                }
+                // Audio past the declared sample count (possible only in a damaged stream) is not delivered.
+                if (!_positionFromHeader && _si.TotalSamples > 0 && start - _linkBase >= _si.TotalSamples) { _ended = true; return false; }
+                if (_fd.Decode(pkt.Data, out h, out used) == FlacFrameStatus.NeedMore)
+                    throw new AudioFormatException("Truncated FLAC frame.");
+                break;
+            }
         }
-        else got = DecodeStreamFrame(out h, out used);
-        if (!got) { _ended = true; return false; }
+        else
+        {
+            if (_si.TotalSamples > 0 && start >= _si.TotalSamples) { _ended = true; return false; }
+            if (!DecodeStreamFrame(out h, out used)) { _ended = true; return false; }
+        }
 
         if (_positionFromHeader)
         {
             // After a container seek the first frame's own number says where it sits; the container's figure marks the end of
             // the packet it chose, which is not the start of the frame.
             _positionFromHeader = false;
-            start = HeaderSample(h);
+            start = _linkBase + HeaderSample(h);
             _blockStart = start;
         }
+        long total = _si.TotalSamples;
+        long rel = start - _linkBase;
         int n = h.BlockSize;
         if (_si.MaxFrameSize > 0 && used > _si.MaxFrameSize) throw new AudioFormatException("FLAC frame is larger than the STREAMINFO maximum frame size.");
-        if (total > 0 && start + n > total) throw new AudioFormatException("FLAC stream holds more samples than STREAMINFO declares.");
+        if (total > 0 && rel + n > total) throw new AudioFormatException("FLAC stream holds more samples than STREAMINFO declares.");
         // RFC 9639 section 8.2: only the last frame may be shorter than the minimum block size.
-        if (n < _si.MinBlockSize && total > 0 && start + n < total) throw new AudioFormatException("FLAC frame is shorter than the STREAMINFO minimum block size.");
+        if (n < _si.MinBlockSize && total > 0 && rel + n < total) throw new AudioFormatException("FLAC frame is shorter than the STREAMINFO minimum block size.");
         _blockLen = n;
         return true;
     }
@@ -477,7 +636,26 @@ public sealed class FlacDecoder : IAudioDecoder
     {
         if (_packets is not null)
         {
-            _packets.SeekToFrame(frame, out long start);
+            long fileFrame = frame;
+            _linkBase = 0;
+            if (_linkSi is not null)
+            {
+                if (frame >= _runLength)
+                {
+                    // The end of the run: nothing more to decode, and the container would carry on into the next run.
+                    _ended = true;
+                    _blockStart = _runLength;
+                    _blockLen = 0;
+                    _blockPos = 0;
+                    return;
+                }
+                int link = _runStart;
+                while (link < _runEnd && _runStarts[link + 1 - _runStart] <= frame) link++;
+                _linkBase = _runStarts[link - _runStart];
+                fileFrame = _ogg!.GetLink(link).StartFrame + (frame - _linkBase);
+                UseLink(_linkSi[link]!, _fd.Capacity);
+            }
+            _packets.SeekToFrame(fileFrame, out long start);
             _ended = false;
             _positionFromHeader = true;
             _blockStart = start;
@@ -654,7 +832,7 @@ public sealed class FlacDecoder : IAudioDecoder
     public bool? VerifyMd5(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_si.HasMd5) return null;
+        if (!_si.HasMd5 || (_linkSi is not null && _runEnd > _runStart)) return null; // one signature per link: not checked across a run
         if (!CanSeek) throw new NotSupportedException("MD5 verification needs a seekable source.");
         long saved = PositionFrames;
         try
