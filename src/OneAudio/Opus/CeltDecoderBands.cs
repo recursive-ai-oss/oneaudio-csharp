@@ -13,12 +13,12 @@ internal sealed partial class CeltDecoder
 
     private static uint LcgRand(uint seed) => unchecked(1664525 * seed + 1013904223);
 
-    private static int EcIlog(uint v) => 32 - System.Numerics.BitOperations.LeadingZeroCount(v);
+    internal static int EcIlog(uint v) => 32 - System.Numerics.BitOperations.LeadingZeroCount(v);
 
-    private static int FracMul16(int a, int b) => (16384 + (short)a * (short)b) >> 15;
+    internal static int FracMul16(int a, int b) => (16384 + (short)a * (short)b) >> 15;
 
     // A cos() approximation that is bit-exact on every platform; it affects the bit allocation (RFC 6716 4.3.4.3).
-    private static int BitexactCos(int x)
+    internal static int BitexactCos(int x)
     {
         int tmp = (4096 + x * x) >> 13;
         int x2 = (short)tmp;
@@ -26,7 +26,7 @@ internal sealed partial class CeltDecoder
         return 1 + x2;
     }
 
-    private static int BitexactLog2Tan(int isin, int icos)
+    internal static int BitexactLog2Tan(int isin, int icos)
     {
         int lc = EcIlog((uint)icos);
         int ls = EcIlog((uint)isin);
@@ -37,7 +37,7 @@ internal sealed partial class CeltDecoder
             - FracMul16(icos, FracMul16(icos, -2597) + 7932);
     }
 
-    private static uint Isqrt32(uint val)
+    internal static uint Isqrt32(uint val)
     {
         uint g = 0;
         int bshift = (EcIlog(val) - 1) >> 1;
@@ -117,7 +117,7 @@ internal sealed partial class CeltDecoder
     // PVQ shape decoding (RFC 6716 sections 4.3.4.1 - 4.3.4.4)
     // ------------------------------------------------------------------------------------------------
 
-    private static void ExpRotation1(Span<float> x, int len, int stride, float c, float s)
+    internal static void ExpRotation1(Span<float> x, int len, int stride, float c, float s)
     {
         int p = 0;
         for (int i = 0; i < len - stride; i++)
@@ -137,11 +137,11 @@ internal sealed partial class CeltDecoder
         }
     }
 
-    private static float CosNorm(float x) => (float)Math.Cos((.5f * Pi) * (double)x);
+    internal static float CosNorm(float x) => (float)Math.Cos((double)((.5f * Pi) * x));
 
     private static readonly int[] SpreadFactor = [15, 10, 5];
 
-    private static void ExpRotation(Span<float> x, int len, int dir, int stride, int k, int spread)
+    internal static void ExpRotation(Span<float> x, int len, int dir, int stride, int k, int spread)
     {
         if (2 * k >= len || spread == SpreadNone) return;
         int factor = SpreadFactor[spread - 1];
@@ -175,7 +175,7 @@ internal sealed partial class CeltDecoder
 
     // Combinatorial recurrence u[i][j] = u[i-1][j] + u[i][j-1] + u[i-1][j-1] (RFC 6716 section 4.3.4.2),
     // applied to ui[off .. off + len).
-    private static void Unext(uint[] ui, int off, int len, uint ui0)
+    internal static void Unext(uint[] ui, int off, int len, uint ui0)
     {
         int j = 1;
         do
@@ -187,7 +187,7 @@ internal sealed partial class CeltDecoder
         ui[off + j - 1] = ui0;
     }
 
-    private static void Uprev(uint[] ui, int n, uint ui0)
+    internal static void Uprev(uint[] ui, int n, uint ui0)
     {
         int j = 1;
         do
@@ -200,7 +200,7 @@ internal sealed partial class CeltDecoder
     }
 
     // Returns V(n, k) and fills u[0..k+1] with row n of U. Requires n >= 2 and k >= 1.
-    private static uint NcwrsUrow(int n, int k, uint[] u)
+    internal static uint NcwrsUrow(int n, int k, uint[] u)
     {
         int len = k + 2;
         u[0] = 0;
@@ -211,7 +211,7 @@ internal sealed partial class CeltDecoder
     }
 
     // Turns a combination index into a pulse vector (cwrsi).
-    private static void Cwrsi(int n, int k, uint i, Span<int> y, uint[] u)
+    internal static void Cwrsi(int n, int k, uint i, Span<int> y, uint[] u)
     {
         int j = 0;
         do

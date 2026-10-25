@@ -2,7 +2,9 @@
 
 Parts of src/OneAudio/Opus are derived from the Opus reference decoder published in RFC 6716 (Appendix A), with the RFC 8251 updates. It is used under the Simplified BSD licence below.
 
-    Files: Opus/RangeDecoder.cs, Silk*.cs, Celt*.cs (tables, algorithms)
+    Files: Opus/RangeDecoder.cs, Silk*.cs, Celt*.cs (tables, algorithms), and the encoder:
+           Opus/RangeEncoder.cs, CeltEncoder*.cs, CeltMdctForward.cs, CeltMdctTables.cs, OpusEncoder.cs,
+           SilkEncoder.cs, SilkEnc*.cs, SilkNsq*.cs, SilkNlsf.cs, SilkLtpEnc.cs, SilkFlp.cs, SilkPitch.cs, SilkStereoEnc.cs, SilkDownResampler.cs
 
 Copyright 1994-2011 IETF Trust, Xiph.Org, Skype Limited, Octasic,
                     Jean-Marc Valin, Timothy B. Terriberry,
