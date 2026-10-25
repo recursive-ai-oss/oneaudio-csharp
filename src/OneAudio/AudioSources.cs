@@ -2,7 +2,7 @@ namespace OneAudio;
 
 /// <summary>
 /// Something a mixer voice can play: a fully decoded <see cref="AudioClip"/> or a <see cref="StreamingSource"/> fed
-/// by a decode thread. Sources must have 1 or 2 channels and the mixer's sample rate.
+/// by a decode thread. A mixer voice accepts any rate (through its resampler) and up to its configured channel count.
 /// </summary>
 public abstract class AudioSource
 {
@@ -116,14 +116,17 @@ public sealed class AudioClip : AudioSource
 /// counted in <see cref="UnderrunEvents"/> and <see cref="UnderrunFrames"/>, readable from any thread.
 /// <para>
 /// One source feeds one voice at a time. Exactly one thread may call <see cref="Pump"/>; the decoder is touched only
-/// by that thread. Looping is done by seeking the decoder to frame 0 when it ends, so it needs a seekable decoder.
-/// The voice-level loop settings do not apply to streaming sources.
+/// by that thread. Looping is done by seeking the decoder back to the loop start when it reaches the loop end (or its
+/// end), so it needs a seekable decoder. The voice-level loop settings do not apply to streaming sources.
+/// <see cref="StreamingPump"/> is a ready-made host for the decode thread.
 /// </para>
 /// </summary>
 public sealed class StreamingSource : AudioSource, IDisposable
 {
     private readonly IAudioDecoder _decoder;
     private readonly bool _loop;
+    private readonly long _loopStart;
+    private readonly long _loopEnd;
     private readonly float[] _ring;
     private readonly float[] _chunk;
     private readonly int _ch;
@@ -132,27 +135,35 @@ public sealed class StreamingSource : AudioSource, IDisposable
     private int _done;  // 1 once the decoder has no more data
     private long _underrunEvents;
     private long _underrunFrames;
+    private Exception? _fault;
 
     /// <summary>Creates a streaming source. The ring is allocated here, once.</summary>
     /// <param name="decoder">Decoder to read from. The source owns it and disposes it with <see cref="Dispose"/>.</param>
     /// <param name="capacityFrames">Ring size in frames (default 32768, about 0.7 s at 48 kHz, minimum 64). Larger tolerates longer decode-thread stalls.</param>
-    /// <param name="loop">Restart from frame 0 when the decoder ends, forever.</param>
-    /// <exception cref="ArgumentException">The decoder has more than 2 channels, or <paramref name="loop"/> is set and it cannot seek.</exception>
-    public StreamingSource(IAudioDecoder decoder, int capacityFrames = 32768, bool loop = false) : base(Validate(decoder, capacityFrames, loop))
+    /// <param name="loop">Restart at <paramref name="loopStartFrame"/> when the decoder ends or reaches <paramref name="loopEndFrame"/>, forever.</param>
+    /// <param name="loopStartFrame">First frame of the loop body, in decoder frames. Default 0. Only used with <paramref name="loop"/>.</param>
+    /// <param name="loopEndFrame">Frame after the loop body, or -1 for the end of the decoder's data. Default -1. Only used with <paramref name="loop"/>.</param>
+    /// <exception cref="ArgumentException">The decoder has more than 32 channels, <paramref name="loop"/> is set and it cannot seek, or the loop points are inconsistent.</exception>
+    public StreamingSource(IAudioDecoder decoder, int capacityFrames = 32768, bool loop = false, long loopStartFrame = 0, long loopEndFrame = -1)
+        : base(Validate(decoder, capacityFrames, loop, loopStartFrame, loopEndFrame))
     {
         _decoder = decoder;
         _loop = loop;
+        _loopStart = loopStartFrame;
+        _loopEnd = loopEndFrame;
         _ch = decoder.Format.Channels;
         _ring = new float[capacityFrames * _ch];
         _chunk = new float[Math.Min(capacityFrames, 4096) * _ch];
     }
 
-    private static AudioFormat Validate(IAudioDecoder decoder, int capacityFrames, bool loop)
+    private static AudioFormat Validate(IAudioDecoder decoder, int capacityFrames, bool loop, long loopStart, long loopEnd)
     {
         ArgumentNullException.ThrowIfNull(decoder);
         ArgumentOutOfRangeException.ThrowIfLessThan(capacityFrames, 64);
-        if (decoder.Format.Channels > 2) throw new ArgumentException("Streaming sources must be mono or stereo.", nameof(decoder));
+        if (decoder.Format.Channels > 32) throw new ArgumentException("Streaming sources have at most 32 channels.", nameof(decoder));
         if (loop && !decoder.CanSeek) throw new ArgumentException("Looping needs a seekable decoder.", nameof(decoder));
+        if (loop && (loopStart < 0 || (loopEnd >= 0 && loopEnd <= loopStart)))
+            throw new ArgumentException("The loop must start at a non-negative frame and end after it.", nameof(loopStart));
         return decoder.Format;
     }
 
@@ -186,11 +197,13 @@ public sealed class StreamingSource : AudioSource, IDisposable
             int free = (int)((_ring.Length - (tail - Volatile.Read(ref _head))) / _ch);
             if (free <= 0) break;
             int want = Math.Min(free, _chunk.Length / _ch);
-            int got = _decoder.Read(_chunk.AsSpan(0, want * _ch));
+            // Never read past the loop end: the rest of the pass wraps to the loop start instead.
+            if (_loop && _loopEnd >= 0) want = (int)Math.Min(want, Math.Max(0, _loopEnd - _decoder.PositionFrames));
+            int got = want == 0 ? 0 : _decoder.Read(_chunk.AsSpan(0, want * _ch));
             if (got == 0)
             {
                 // Seek once; if the restarted decoder is still empty there is nothing to loop.
-                if (_loop && !justSought) { _decoder.Seek(0); justSought = true; continue; }
+                if (_loop && !justSought) { _decoder.Seek(_loopStart); justSought = true; continue; }
                 Volatile.Write(ref _done, 1);
                 break;
             }
@@ -204,6 +217,18 @@ public sealed class StreamingSource : AudioSource, IDisposable
             added += got;
         }
         return added;
+    }
+
+    /// <summary>
+    /// The error that stopped decoding, if the decoder threw while being pumped by a <see cref="StreamingPump"/>; null otherwise.
+    /// A faulted source plays out what was already decoded and then ends like a finished one.
+    /// </summary>
+    public Exception? Fault => Volatile.Read(ref _fault);
+
+    internal void Fail(Exception error)
+    {
+        Volatile.Write(ref _fault, error);
+        Volatile.Write(ref _done, 1);
     }
 
     /// <summary>Disposes the decoder. Call after the voice has stopped and the decode thread has finished.</summary>

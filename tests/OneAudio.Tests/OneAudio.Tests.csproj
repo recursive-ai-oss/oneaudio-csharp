@@ -5,6 +5,11 @@
     <IsTestProject>true</IsTestProject>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CA1707;CA1861;xUnit1051;xUnit1031</NoWarn>
+    <!-- The allocation tests read GC.GetAllocatedBytesForCurrentThread around single calls. A background (concurrent) GC, which a
+         large allocation on the same thread can start, suspends the thread mid-call and shifts that per-thread counter by the
+         unused part of its allocation buffer, which shows up as a few KB of phantom allocation. Blocking GCs run on the
+         allocating thread, outside the measured calls. -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="xunit.v3" Version="4.0.2" />

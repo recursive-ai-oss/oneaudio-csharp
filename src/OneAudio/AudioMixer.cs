@@ -9,11 +9,21 @@ public sealed record MixerOptions
     /// <summary>Output channels per frame (1..32), chosen by the host. Fixed for the mixer's lifetime. Default 2.</summary>
     public int Channels { get; init; } = 2;
 
+    /// <summary>
+    /// Speaker layout of the output, used to map multichannel sources (see <see cref="AudioMixer"/>). When
+    /// <see cref="ChannelMask.None"/> or when its bit count differs from <see cref="Channels"/>, the conventional layout for the
+    /// channel count is used (mono, stereo, quad, 5.1, 7.1); other counts are mapped by channel index. Default <see cref="ChannelMask.None"/>.
+    /// </summary>
+    public ChannelMask OutputChannelMask { get; init; } = ChannelMask.None;
+
     /// <summary>Most simultaneously active voices. When all are busy a new voice steals the lowest-priority one or is dropped. Default 64.</summary>
     public int MaxVoices { get; init; } = 64;
 
-    /// <summary>Number of buses (gain groups), indexed from 0. Default 8.</summary>
+    /// <summary>Number of buses (gain groups and sub-mixes), indexed from 0. Default 8.</summary>
     public int MaxBuses { get; init; } = 8;
+
+    /// <summary>Most channels a source may have (1..32). Per-voice scratch is sized from it. Default 8, enough for 7.1.</summary>
+    public int MaxSourceChannels { get; init; } = 8;
 
     /// <summary>Capacity of the control-to-render command queue. Commands issued while it is full are dropped and counted. Default 1024.</summary>
     public int CommandCapacity { get; init; } = 1024;
@@ -27,6 +37,96 @@ public sealed record MixerOptions
     /// </summary>
     public int MaxBlockFrames { get; init; } = 1024;
 
+    /// <summary>
+    /// Length of the linear ramp, in milliseconds, applied to pan, bus gain, bus mute and master gain changes that do not
+    /// name their own ramp, so that a change is not heard as a click. 0 makes them jump at the next pass. Default 10.
+    /// </summary>
+    public double SmoothingMilliseconds { get; init; } = 10.0;
+
+    /// <summary>
+    /// Replaces the built-in converters (<see cref="AudioResampler"/>) with your own. Called on the control thread with the
+    /// source's channel count and the quality; it must return a converter of exactly that channel count whose ratio range covers
+    /// <see cref="ConverterMinRatio"/> to <see cref="ConverterMaxRatio"/>. Default null: use the library's resamplers.
+    /// </summary>
+    public Func<int, ResamplerQuality, IResampler>? ResamplerFactory { get; init; }
+
+    /// <summary>
+    /// Lowest conversion ratio (output rate / input rate, including pitch) a voice may reach. A voice needs a converter when its
+    /// source's rate differs from <see cref="SampleRate"/> or it is pitched; its ratio is <c>SampleRate / (sourceRate * pitch)</c>.
+    /// The polyphase filter widens as the ratio falls, so converter memory scales with <c>1 / min(1, ConverterMinRatio)</c>:
+    /// a <see cref="ResamplerQuality.Polyphase"/> converter takes about 0.3 MB at 1.0, 0.6 MB at 0.5 (the default) and 1.2 MB at 0.25
+    /// (<see cref="ResamplerQuality.PolyphaseFast"/> is smaller, <see cref="ResamplerQuality.Linear"/> negligible). Play rejects a
+    /// voice whose starting ratio is outside this range, and <see cref="AudioMixer.SetPitch"/> clamps to it. Range 1/64 to
+    /// <see cref="ConverterMaxRatio"/>. Default 0.5: a 96 kHz source at pitch 1, or a 48 kHz source up to an octave higher.
+    /// </summary>
+    public double ConverterMinRatio { get; init; } = 0.5;
+
+    /// <summary>Highest conversion ratio a voice may reach (heavy slow-down of a low-rate source). Costs no memory. Range <see cref="ConverterMinRatio"/> to 64. Default 16.</summary>
+    public double ConverterMaxRatio { get; init; } = 16.0;
+
+    /// <summary>
+    /// Converters built when the mixer is created, so the first voices that need one do not pay for it (the shared filter tables
+    /// are built here, never on a render or play call). Beyond these, converters are created on demand inside <c>Play</c> on the
+    /// control thread, up to <see cref="MaxConvertedVoices"/>, and recycled afterwards. Memory is as described at
+    /// <see cref="ConverterMinRatio"/>, per converter. The default holds 4 mono and 4 stereo <see cref="ResamplerQuality.Linear"/>,
+    /// 2 mono and 2 stereo <see cref="ResamplerQuality.PolyphaseFast"/> and 1 mono and 1 stereo <see cref="ResamplerQuality.Polyphase"/>
+    /// converter, about 2.5 MB with the default ratio range, trimmed to <see cref="MaxConvertedVoices"/> (and to
+    /// <see cref="MaxSourceChannels"/>). Null selects that default; an empty list reserves nothing; an explicit list must fit
+    /// within <see cref="MaxConvertedVoices"/>.
+    /// </summary>
+    public IReadOnlyList<ConverterReservation>? PreallocatedConverters { get; init; }
+
+    internal static readonly ConverterReservation[] DefaultReservations =
+    [
+        new(1, ResamplerQuality.Linear, 4), new(2, ResamplerQuality.Linear, 4),
+        new(1, ResamplerQuality.PolyphaseFast, 2), new(2, ResamplerQuality.PolyphaseFast, 2),
+        new(1, ResamplerQuality.Polyphase, 1), new(2, ResamplerQuality.Polyphase, 1),
+    ];
+
+    internal List<ConverterReservation> ResolveReservations()
+    {
+        int cap = MaxConvertedVoices < 0 ? MaxVoices : MaxConvertedVoices;
+        var result = new List<ConverterReservation>();
+        if (PreallocatedConverters != null)
+        {
+            long total = 0;
+            foreach (var r in PreallocatedConverters)
+            {
+                if (r == null || r.Channels < 1 || r.Channels > MaxSourceChannels || r.Count < 0 || !Enum.IsDefined(r.Quality))
+                    throw new ArgumentOutOfRangeException(nameof(PreallocatedConverters), "Invalid converter reservation.");
+                total += r.Count;
+                result.Add(r);
+            }
+            if (total > cap) throw new ArgumentOutOfRangeException(nameof(PreallocatedConverters), "More converters reserved than MaxConvertedVoices allows.");
+            return result;
+        }
+        int left = cap;
+        foreach (var r in DefaultReservations)
+        {
+            if (r.Channels > MaxSourceChannels || left <= 0) continue;
+            int n = Math.Min(r.Count, left);
+            left -= n;
+            result.Add(r with { Count = n });
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Most converters that may exist at once, which bounds converter memory. A <c>Play</c> that needs a converter when all are
+    /// in use (idle ones of other kinds are dropped to make room) returns an invalid handle and counts in <see cref="AudioMixer.DroppedConverterRequests"/>. -1 means
+    /// <see cref="MaxVoices"/> (no voice is ever refused). Default -1.
+    /// </summary>
+    public int MaxConvertedVoices { get; init; } = -1;
+
+    /// <summary>
+    /// Most expensive ratio changes the render thread performs per pass across all voices. Moving a polyphase voice's ratio by more
+    /// than a few percent while it is below 1 makes the converter redesign its filter bank (about 0.3 ms, no allocation); a pitch bend
+    /// on many voices could otherwise do dozens of those in one callback. Over-budget voices keep their previous ratio for that pass and
+    /// are retried in turn on the next ones, so their pitch lags by at most a few percent. Linear converters are never limited.
+    /// Default 2 (about 0.6 ms worst case per pass); <see cref="int.MaxValue"/> disables the limit.
+    /// </summary>
+    public int RatioRedesignsPerPass { get; init; } = 2;
+
     internal void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(SampleRate, 1);
@@ -36,12 +136,27 @@ public sealed record MixerOptions
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxVoices, 4096);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxBuses, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxBuses, 256);
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaxSourceChannels, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxSourceChannels, 32);
         ArgumentOutOfRangeException.ThrowIfLessThan(CommandCapacity, 16);
         ArgumentOutOfRangeException.ThrowIfLessThan(EventCapacity, 16);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxBlockFrames, 16);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxBlockFrames, 65536);
+        if (!double.IsFinite(SmoothingMilliseconds) || SmoothingMilliseconds < 0 || SmoothingMilliseconds > 1000)
+            throw new ArgumentOutOfRangeException(nameof(SmoothingMilliseconds));
+        if (!(ConverterMinRatio >= 1.0 / 64 && ConverterMinRatio <= ConverterMaxRatio && ConverterMaxRatio <= 64))
+            throw new ArgumentOutOfRangeException(nameof(ConverterMinRatio), "Converter ratios must satisfy 1/64 <= min <= max <= 64.");
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaxConvertedVoices, -1);
+        ArgumentOutOfRangeException.ThrowIfNegative(RatioRedesignsPerPass);
+        ResolveReservations();
     }
 }
+
+/// <summary>A number of converters of one kind to build when the mixer is created.</summary>
+/// <param name="Channels">Channel count of the sources they will convert (1 to <see cref="MixerOptions.MaxSourceChannels"/>).</param>
+/// <param name="Quality">Converter quality.</param>
+/// <param name="Count">How many to build.</param>
+public sealed record ConverterReservation(int Channels, ResamplerQuality Quality, int Count);
 
 /// <summary>Identifies one playing instance of a sound. Handles are never reused; a stale handle is simply ignored by control calls.</summary>
 /// <param name="Id">Unique id, positive for a real voice.</param>
@@ -58,22 +173,28 @@ public readonly record struct PlayParams
     /// <param name="source">What to play.</param>
     public PlayParams(AudioSource source) => Source = source;
 
-    /// <summary>What to play. It must have 1 or 2 channels and the mixer's sample rate.</summary>
+    /// <summary>
+    /// What to play: up to <see cref="MixerOptions.MaxSourceChannels"/> channels. A rate other than the mixer's needs
+    /// <see cref="MixerOptions.ResamplerFactory"/>.
+    /// </summary>
     public AudioSource Source { get; init; }
 
     /// <summary>Linear gain, 1 = unity. Default 1.</summary>
     public float Gain { get; init; } = 1f;
 
-    /// <summary>Position from -1 (left) to +1 (right). Mono sources use a constant-power law; stereo sources are balanced. Default 0.</summary>
+    /// <summary>
+    /// Position from -1 (left) to +1 (right). Mono sources use a constant-power law across the front pair; other sources
+    /// are balanced. Default 0.
+    /// </summary>
     public float Pan { get; init; }
 
     /// <summary>Repeat clips between <see cref="LoopStartFrame"/> and <see cref="LoopEndFrame"/>. Ignored by streaming sources (loop those at construction). Default false.</summary>
     public bool Loop { get; init; }
 
-    /// <summary>First frame of the loop body. Default 0.</summary>
+    /// <summary>First frame of the loop body, in source frames. Default 0.</summary>
     public long LoopStartFrame { get; init; }
 
-    /// <summary>Frame after the last frame of the loop body; -1 means the end of the clip. Default -1.</summary>
+    /// <summary>Frame after the last frame of the loop body, in source frames; -1 means the end of the clip. Default -1.</summary>
     public long LoopEndFrame { get; init; } = -1;
 
     /// <summary>Bus the voice feeds, 0..MaxBuses-1. Default 0.</summary>
@@ -90,6 +211,30 @@ public readonly record struct PlayParams
 
     /// <summary>Length of a linear fade from silence to <see cref="Gain"/>, in frames. 0 = no fade. Default 0.</summary>
     public int FadeInFrames { get; init; }
+
+    /// <summary>
+    /// Playback speed multiplier, which also shifts pitch: 2 plays an octave up at twice the speed. Range
+    /// <see cref="AudioMixer.MinPitch"/> to <see cref="AudioMixer.MaxPitch"/>, and the resulting conversion ratio must lie within
+    /// <see cref="MixerOptions.ConverterMinRatio"/> to <see cref="MixerOptions.ConverterMaxRatio"/>. Default 1.
+    /// </summary>
+    public float Pitch { get; init; } = 1f;
+
+    /// <summary>
+    /// Reserve a converter even though the voice starts at pitch 1 and the source's rate matches, so that
+    /// <see cref="AudioMixer.SetPitch"/> can change the pitch later. The converter then runs for the whole voice (a ratio of 1 is
+    /// still filtered, with a 0.95 x Nyquist cutoff) so that the pitch can move without a start-up transient. Without it (and
+    /// without a rate mismatch or <see cref="Pitch"/> other than 1) <see cref="AudioMixer.SetPitch"/> has no effect on the voice. Default false.
+    /// </summary>
+    public bool VariablePitch { get; init; }
+
+    /// <summary>
+    /// Quality of the converter used for rate conversion and pitch. Null (the default) chooses: <see cref="ResamplerQuality.PolyphaseFast"/>
+    /// when only the sample rate differs, <see cref="ResamplerQuality.Linear"/> for pitched voices (<see cref="Pitch"/> other than 1 or
+    /// <see cref="VariablePitch"/>), which is cheap and can bend freely. <see cref="ResamplerQuality.Polyphase"/> has the best rejection and
+    /// the highest cost; polyphase voices that bend pitch below ratio 1 are subject to <see cref="MixerOptions.RatioRedesignsPerPass"/>.
+    /// Converters add look-ahead latency that the converter compensates for; a voice's end is delivered through the converter's flush.
+    /// </summary>
+    public ResamplerQuality? Resampling { get; init; }
 }
 
 /// <summary>What a <see cref="MixerEvent"/> reports.</summary>
@@ -127,62 +272,78 @@ public readonly record struct MixerEvent(MixerEventKind Kind, long VoiceId, long
 /// buses and queues are created in the constructor. Notifications go the other way through a second ring, polled
 /// with <see cref="TryGetEvent"/>.</description></item>
 /// <item><description><b>Streaming.</b> A <see cref="StreamingSource"/> is decoded ahead by a thread of the host's
-/// choosing (calling <see cref="StreamingSource.Pump"/>); the render thread only reads its ring. An empty ring renders
+/// choosing (see <see cref="StreamingPump"/>); the render thread only reads its ring. An empty ring renders
 /// silence and counts an underrun.</description></item>
-/// <item><description><b>Output.</b> The mix is summed, not clipped; a limiter effect is separate. Sources must already be at the
-/// mixer's sample rate (per-voice resampling is not applied yet). Sources with more than two channels are not accepted.</description></item>
+/// <item><description><b>Sources and layouts.</b> A source has 1 to <see cref="MixerOptions.MaxSourceChannels"/> channels and any
+/// sample rate. Its channels are mapped onto the output by speaker position (<see cref="AudioFormat.ChannelMask"/> and
+/// <see cref="MixerOptions.OutputChannelMask"/>): a mono source is panned across the output's front pair with a constant-power law,
+/// speakers the output has go straight through, missing speakers are folded into the nearest ones (centre to the front pair at -3 dB,
+/// surrounds and sides to each other or to the front pair at -3 dB) and LFE is dropped when the output has none. Layouts without a
+/// convention map by channel index. A source whose rate differs from the mixer's, or a pitched voice, is converted through an
+/// <see cref="IResampler"/> from <see cref="MixerOptions.ResamplerFactory"/>.</description></item>
+/// <item><description><b>Buses.</b> Every voice feeds one bus; each bus feeds the master output or another bus
+/// (<see cref="SetBusOutput"/>), so sub-mixes sum into their parent. Loops in the routing are rejected. A bus can duck another
+/// (<see cref="SetDucking"/>). Pan, bus gain and mute changes ramp over <see cref="MixerOptions.SmoothingMilliseconds"/>.</description></item>
+/// <item><description><b>Output.</b> The mix is summed, not clipped; a limiter effect is separate.</description></item>
 /// </list>
 /// </summary>
-public sealed class AudioMixer
+public sealed partial class AudioMixer
 {
+    /// <summary>Lowest accepted <see cref="PlayParams.Pitch"/> (four octaves down).</summary>
+    public const float MinPitch = 1f / 16f;
+
+    /// <summary>Highest accepted <see cref="PlayParams.Pitch"/> (four octaves up).</summary>
+    public const float MaxPitch = 16f;
+
     private struct Command
     {
         public CommandKind Kind;
         public long Id;
         public AudioSource? Source;
+        public IResampler? Resampler;
         public float Gain;
         public float Pan;
+        public float Pitch;
+        public bool Flag;
         public bool Loop;
         public long LoopStart;
         public long LoopEnd;
         public int Bus;
+        public int Aux;
         public int Priority;
         public long StartAt;
         public int Frames;
+        public float F0, F1, F2, F3;
     }
 
-    private enum CommandKind : byte { Play, Stop, StopAll, SetGain, SetPan, SetLoop, SetBusGain }
-
-    private sealed class Voice
+    private enum CommandKind : byte
     {
-        public bool Active;
-        public long Id;
-        public long Seq;
-        public AudioSource? Source;
-        public float Gain, GainTarget, GainStep;
-        public int RampLeft;
-        public bool StopAfterRamp;
-        public float Pan;
-        public bool Loop;
-        public long LoopStart, LoopEnd;
-        public int Bus, Priority;
-        public long StartAt;
-        public long Position;
-        public bool InUnderrun;
+        Play, Stop, StopAll, SetGain, SetPan, SetLoop, SetBusGain, SetPitch, SetBusMute, SetBusRoute, SetDuck, SetMasterGain,
     }
 
     private readonly int _sampleRate;
     private readonly int _channels;
     private readonly int _maxBlock;
+    private readonly int _maxSrcChannels;
+    private readonly int _smoothFrames;
+    private readonly ChannelMask _outMask;
+    private readonly Func<int, ResamplerQuality, IResampler> _resamplerFactory;
+    private readonly double _minRatio, _maxRatio;
+    private readonly int _maxConverters;
+    private readonly int _redesignBudget;
+    private int _converterCount;
+    private long _droppedConverters;
     private readonly SpscQueue<Command> _commands;
     private readonly SpscQueue<MixerEvent> _events;
+    private readonly SpscQueue<IResampler> _retired;
     private readonly object _controlLock = new();
-    private readonly Voice[] _voices;
-    private readonly float[] _busGain;
-    private readonly float[] _scratch;
+
+    // Control-side mirror of the bus graph, guarded by _controlLock, for cycle rejection.
+    private readonly int[] _ctlParent;
+    private readonly int[] _ctlDuckSource;
+    private readonly Dictionary<int, Stack<IResampler>> _pool = [];
 
     private long _nextId;
-    private long _seq;
     private long _timeline;
     private int _activeVoices;
     private long _underrunEvents, _underrunFrames, _droppedCommands, _droppedPlays, _droppedEvents, _stolen;
@@ -197,20 +358,54 @@ public sealed class AudioMixer
         _sampleRate = options.SampleRate;
         _channels = options.Channels;
         _maxBlock = options.MaxBlockFrames;
+        _maxSrcChannels = options.MaxSourceChannels;
+        _smoothFrames = (int)Math.Round(options.SmoothingMilliseconds * 0.001 * options.SampleRate);
+        _outMask = options.OutputChannelMask;
+        _minRatio = options.ConverterMinRatio;
+        _maxRatio = options.ConverterMaxRatio;
+        _maxConverters = options.MaxConvertedVoices < 0 ? options.MaxVoices : options.MaxConvertedVoices;
+        _redesignBudget = options.RatioRedesignsPerPass;
+        var converterOptions = new ResamplerOptions { MinRatio = _minRatio, MaxRatio = _maxRatio };
+        _resamplerFactory = options.ResamplerFactory ?? ((ch, q) => AudioResampler.Create(ch, q, 1.0, converterOptions));
         _commands = new SpscQueue<Command>(options.CommandCapacity);
         _events = new SpscQueue<MixerEvent>(options.EventCapacity);
-        _voices = new Voice[options.MaxVoices];
-        for (int i = 0; i < _voices.Length; i++) _voices[i] = new Voice();
-        _busGain = new float[options.MaxBuses];
-        Array.Fill(_busGain, 1f);
-        _scratch = new float[_maxBlock * 2];
+        _retired = new SpscQueue<IResampler>(options.MaxVoices * 2 + 16);
+        _ctlParent = new int[options.MaxBuses];
+        _ctlDuckSource = new int[options.MaxBuses];
+        Array.Fill(_ctlParent, -1);
+        Array.Fill(_ctlDuckSource, -1);
+        _voiceCount = options.MaxVoices;
+        _voices = new Voice[_voiceCount];
+        for (int i = 0; i < _voices.Length; i++) _voices[i] = new Voice(_channels, _maxSrcChannels);
+        _buses = new Bus[options.MaxBuses];
+        for (int i = 0; i < _buses.Length; i++) _buses[i] = new Bus { Buf = new float[_channels * _maxBlock] };
+        _master = new Bus { Buf = new float[_channels * _maxBlock] };
+        _order = new int[_buses.Length];
+        _indegree = new int[_buses.Length];
+        _placed = new bool[_buses.Length];
+        _srcPlanar = new float[_maxSrcChannels * _maxBlock];
+        _inter = new float[_maxSrcChannels * _maxBlock];
+        _inCapacity = ResampleChunk + CarryCapacity;
+        _inScratch = new float[_inCapacity * _maxSrcChannels];
+        _curve = new float[_maxBlock];
+        _detectorRelease = (float)Math.Exp(-1.0 / (DetectorReleaseSeconds * _sampleRate));
+        // Reserved converters are built now, which also builds the shared filter tables outside any render or play call.
+        foreach (var r in options.ResolveReservations())
+            for (int i = 0; i < r.Count; i++) PoolPush(CreateConverter(r.Channels, r.Quality));
+    
     }
+
+    /// <summary>Play requests refused because every converter allowed by <see cref="MixerOptions.MaxConvertedVoices"/> was in use. Safe to read from any thread.</summary>
+    public long DroppedConverterRequests => Volatile.Read(ref _droppedConverters);
 
     /// <summary>Output sample rate in Hz.</summary>
     public int SampleRate => _sampleRate;
 
     /// <summary>Output channels per frame.</summary>
     public int Channels => _channels;
+
+    /// <summary>Number of buses, from <see cref="MixerOptions.MaxBuses"/>.</summary>
+    public int BusCount => _ctlParent.Length;
 
     /// <summary>Frames rendered so far; the mixer's clock for <see cref="PlayParams.StartAtFrame"/>. Safe to read from any thread.</summary>
     public long TimelineFrames => Volatile.Read(ref _timeline);
@@ -241,15 +436,26 @@ public sealed class AudioMixer
     /// <summary>Starts a voice.</summary>
     /// <param name="parameters">What to play and how.</param>
     /// <returns>A handle, or <c>default</c> (invalid) if the command queue was full.</returns>
-    /// <exception cref="ArgumentException">The source is missing, has more than two channels, or runs at a different sample rate.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Bus or fade is out of range.</exception>
+    /// <exception cref="ArgumentException">The source is missing or has too many channels.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Bus, fade, gain or pitch is out of range, or the conversion ratio (from the
+    /// source's rate and the pitch) is outside <see cref="MixerOptions.ConverterMinRatio"/> to <see cref="MixerOptions.ConverterMaxRatio"/>.</exception>
     public VoiceHandle Play(in PlayParams parameters)
     {
-        Command cmd = BuildPlay(in parameters);
+        Command cmd = BuildPlay(in parameters, out int channels, out ResamplerQuality quality, out double ratio);
         lock (_controlLock)
         {
+            if (ratio > 0)
+            {
+                cmd.Resampler = AcquireResampler(channels, quality, ratio);
+                if (cmd.Resampler == null) { Interlocked.Increment(ref _droppedConverters); return default; }
+            }
             cmd.Id = ++_nextId;
-            if (!_commands.TryEnqueue(cmd)) { Interlocked.Increment(ref _droppedCommands); return default; }
+            if (!_commands.TryEnqueue(cmd))
+            {
+                Interlocked.Increment(ref _droppedCommands);
+                Release(cmd.Resampler);
+                return default;
+            }
             return new VoiceHandle(cmd.Id);
         }
     }
@@ -265,10 +471,15 @@ public sealed class AudioMixer
     public VoiceHandle Crossfade(VoiceHandle from, in PlayParams to, int frames)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(frames, 1);
-        Command play = BuildPlay(to with { FadeInFrames = frames });
+        Command play = BuildPlay(to with { FadeInFrames = frames }, out int channels, out ResamplerQuality quality, out double ratio);
         lock (_controlLock)
         {
             if (_commands.FreeSlots < 2) { Interlocked.Increment(ref _droppedCommands); return default; }
+            if (ratio > 0)
+            {
+                play.Resampler = AcquireResampler(channels, quality, ratio);
+                if (play.Resampler == null) { Interlocked.Increment(ref _droppedConverters); return default; }
+            }
             play.Id = ++_nextId;
             _commands.TryEnqueue(play);
             _commands.TryEnqueue(new Command { Kind = CommandKind.Stop, Id = from.Id, Frames = frames });
@@ -297,22 +508,52 @@ public sealed class AudioMixer
 
     /// <summary>Changes a voice's gain, optionally ramping linearly.</summary>
     /// <param name="voice">The voice.</param>
-    /// <param name="gain">New linear gain (not negative).</param>
+    /// <param name="gain">New linear gain (finite, not negative).</param>
     /// <param name="rampFrames">Ramp length in frames; 0 jumps at the next pass.</param>
     /// <returns>False if the command queue was full.</returns>
     public bool SetGain(VoiceHandle voice, float gain, int rampFrames = 0)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(gain);
+        CheckGain(gain);
         ArgumentOutOfRangeException.ThrowIfNegative(rampFrames);
         return Enqueue(new Command { Kind = CommandKind.SetGain, Id = voice.Id, Gain = gain, Frames = rampFrames });
     }
 
-    /// <summary>Changes a voice's pan, -1 (left) to +1 (right). Applied per pass without smoothing.</summary>
+    /// <summary>
+    /// Changes a voice's pan, -1 (left) to +1 (right), ramping over <see cref="MixerOptions.SmoothingMilliseconds"/>
+    /// so the move is not heard as a click.
+    /// </summary>
     /// <param name="voice">The voice.</param>
     /// <param name="pan">New pan, clamped to [-1, 1].</param>
     /// <returns>False if the command queue was full.</returns>
-    public bool SetPan(VoiceHandle voice, float pan) =>
-        Enqueue(new Command { Kind = CommandKind.SetPan, Id = voice.Id, Pan = Math.Clamp(pan, -1f, 1f) });
+    public bool SetPan(VoiceHandle voice, float pan) => SetPan(voice, pan, -1);
+
+    /// <summary>Changes a voice's pan with an explicit ramp.</summary>
+    /// <param name="voice">The voice.</param>
+    /// <param name="pan">New pan, clamped to [-1, 1].</param>
+    /// <param name="rampFrames">Ramp length in frames; 0 jumps at the next pass; negative uses <see cref="MixerOptions.SmoothingMilliseconds"/>.</param>
+    /// <returns>False if the command queue was full.</returns>
+    public bool SetPan(VoiceHandle voice, float pan, int rampFrames)
+    {
+        CheckFinite(pan, nameof(pan));
+        return Enqueue(new Command { Kind = CommandKind.SetPan, Id = voice.Id, Pan = Math.Clamp(pan, -1f, 1f), Frames = rampFrames });
+    }
+
+    /// <summary>
+    /// Changes a voice's playback speed and pitch. It only takes effect on a voice that reserved a converter at
+    /// <see cref="Play"/> (a rate mismatch, a <see cref="PlayParams.Pitch"/> other than 1 or <see cref="PlayParams.VariablePitch"/>);
+    /// otherwise it is ignored.
+    /// </summary>
+    /// <param name="voice">The voice.</param>
+    /// <param name="pitch">Speed multiplier from <see cref="MinPitch"/> to <see cref="MaxPitch"/>; 1 is the source's own speed.</param>
+    /// <param name="rampFrames">Glide length in frames, applied in steps at pass boundaries; 0 jumps at the next pass.</param>
+    /// <returns>False if the command queue was full.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The pitch or ramp is out of range.</exception>
+    public bool SetPitch(VoiceHandle voice, float pitch, int rampFrames = 0)
+    {
+        CheckPitch(pitch);
+        ArgumentOutOfRangeException.ThrowIfNegative(rampFrames);
+        return Enqueue(new Command { Kind = CommandKind.SetPitch, Id = voice.Id, Pitch = pitch, Frames = rampFrames });
+    }
 
     /// <summary>Changes a clip voice's loop settings.</summary>
     /// <param name="voice">The voice.</param>
@@ -323,15 +564,124 @@ public sealed class AudioMixer
     public bool SetLoop(VoiceHandle voice, bool loop, long startFrame = 0, long endFrame = -1) =>
         Enqueue(new Command { Kind = CommandKind.SetLoop, Id = voice.Id, Loop = loop, LoopStart = startFrame, LoopEnd = endFrame });
 
-    /// <summary>Sets a bus's gain; every voice routed to it is multiplied by it. Applied per pass without smoothing.</summary>
+    /// <summary>
+    /// Sets a bus's gain; everything routed to it is multiplied by it. The change ramps over
+    /// <see cref="MixerOptions.SmoothingMilliseconds"/>.
+    /// </summary>
     /// <param name="bus">Bus index, 0..MaxBuses-1.</param>
-    /// <param name="gain">Linear gain (not negative).</param>
+    /// <param name="gain">Linear gain (finite, not negative).</param>
     /// <returns>False if the command queue was full.</returns>
-    public bool SetBusGain(int bus, float gain)
+    public bool SetBusGain(int bus, float gain) => SetBusGain(bus, gain, -1);
+
+    /// <summary>Sets a bus's gain with an explicit ramp.</summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1.</param>
+    /// <param name="gain">Linear gain (finite, not negative).</param>
+    /// <param name="rampFrames">Ramp length in frames; 0 jumps at the next pass; negative uses <see cref="MixerOptions.SmoothingMilliseconds"/>.</param>
+    /// <returns>False if the command queue was full.</returns>
+    public bool SetBusGain(int bus, float gain, int rampFrames)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(gain);
-        if ((uint)bus >= (uint)_busGain.Length) throw new ArgumentOutOfRangeException(nameof(bus));
-        return Enqueue(new Command { Kind = CommandKind.SetBusGain, Bus = bus, Gain = gain });
+        CheckGain(gain);
+        CheckBus(bus);
+        return Enqueue(new Command { Kind = CommandKind.SetBusGain, Bus = bus, Gain = gain, Frames = rampFrames });
+    }
+
+    /// <summary>Mutes or unmutes a bus without disturbing its gain setting. The change ramps like <see cref="SetBusGain(int, float)"/>.</summary>
+    /// <param name="bus">Bus index, 0..MaxBuses-1.</param>
+    /// <param name="muted">True to silence the bus and everything routed through it.</param>
+    /// <returns>False if the command queue was full.</returns>
+    public bool SetBusMute(int bus, bool muted)
+    {
+        CheckBus(bus);
+        return Enqueue(new Command { Kind = CommandKind.SetBusMute, Bus = bus, Flag = muted, Frames = -1 });
+    }
+
+    /// <summary>Sets the gain of the final output (after every bus), ramping over <see cref="MixerOptions.SmoothingMilliseconds"/>.</summary>
+    /// <param name="gain">Linear gain (finite, not negative).</param>
+    /// <returns>False if the command queue was full.</returns>
+    public bool SetMasterGain(float gain)
+    {
+        CheckGain(gain);
+        return Enqueue(new Command { Kind = CommandKind.SetMasterGain, Gain = gain, Frames = -1 });
+    }
+
+    /// <summary>
+    /// Routes a bus into another bus, or to the master output. Every bus starts routed to the master output.
+    /// </summary>
+    /// <param name="bus">The bus whose output is being routed, 0..MaxBuses-1.</param>
+    /// <param name="outputBus">The receiving bus, or -1 for the master output.</param>
+    /// <returns>False if the command queue was full (the routing is then unchanged).</returns>
+    /// <exception cref="ArgumentOutOfRangeException">A bus index is out of range.</exception>
+    /// <exception cref="ArgumentException">The route would make a bus feed itself, directly or through other buses or ducking links.</exception>
+    public bool SetBusOutput(int bus, int outputBus)
+    {
+        CheckBus(bus);
+        if (outputBus != -1) CheckBus(outputBus, nameof(outputBus));
+        lock (_controlLock)
+        {
+            int old = _ctlParent[bus];
+            if (outputBus >= 0 && (outputBus == bus || Reaches(outputBus, bus)))
+                throw new ArgumentException("The route would create a loop in the bus graph.", nameof(outputBus));
+            _ctlParent[bus] = outputBus;
+            if (_commands.TryEnqueue(new Command { Kind = CommandKind.SetBusRoute, Bus = bus, Aux = outputBus })) return true;
+            _ctlParent[bus] = old;
+        }
+        Interlocked.Increment(ref _droppedCommands);
+        return false;
+    }
+
+    /// <summary>
+    /// Makes <paramref name="targetBus"/> duck: its gain is reduced while <paramref name="sourceBus"/> is loud, for example
+    /// music under dialogue. One source per target; a later call replaces the earlier one. The source is processed before the target.
+    /// </summary>
+    /// <param name="targetBus">The bus that is turned down.</param>
+    /// <param name="sourceBus">The bus whose level is watched.</param>
+    /// <param name="settings">Threshold, depth and timing; null uses the defaults of <see cref="DuckingSettings"/>.</param>
+    /// <returns>False if the command queue was full (nothing changed).</returns>
+    /// <exception cref="ArgumentOutOfRangeException">A bus index or a setting is out of range.</exception>
+    /// <exception cref="ArgumentException">Both are the same bus, or the link would make the target feed the source, directly or indirectly.</exception>
+    public bool SetDucking(int targetBus, int sourceBus, DuckingSettings? settings = null)
+    {
+        CheckBus(targetBus, nameof(targetBus));
+        CheckBus(sourceBus, nameof(sourceBus));
+        settings ??= new DuckingSettings();
+        settings.Validate();
+        double rate = _sampleRate;
+        var cmd = new Command
+        {
+            Kind = CommandKind.SetDuck, Bus = targetBus, Aux = sourceBus,
+            F0 = (float)Math.Pow(10.0, settings.ThresholdDb / 20.0),
+            F1 = (float)Math.Pow(10.0, -settings.ReductionDb / 20.0),
+            F2 = TimeConstant(settings.AttackMs, rate),
+            F3 = TimeConstant(settings.ReleaseMs, rate),
+        };
+        lock (_controlLock)
+        {
+            int old = _ctlDuckSource[targetBus];
+            if (sourceBus == targetBus || Reaches(targetBus, sourceBus))
+                throw new ArgumentException("The ducking link would create a loop in the bus graph.", nameof(sourceBus));
+            _ctlDuckSource[targetBus] = sourceBus;
+            if (_commands.TryEnqueue(cmd)) return true;
+            _ctlDuckSource[targetBus] = old;
+        }
+        Interlocked.Increment(ref _droppedCommands);
+        return false;
+    }
+
+    /// <summary>Removes ducking from a bus. Its gain returns to unity with the release time it had.</summary>
+    /// <param name="targetBus">The bus.</param>
+    /// <returns>False if the command queue was full.</returns>
+    public bool ClearDucking(int targetBus)
+    {
+        CheckBus(targetBus, nameof(targetBus));
+        lock (_controlLock)
+        {
+            int old = _ctlDuckSource[targetBus];
+            _ctlDuckSource[targetBus] = -1;
+            if (_commands.TryEnqueue(new Command { Kind = CommandKind.SetDuck, Bus = targetBus, Aux = -1 })) return true;
+            _ctlDuckSource[targetBus] = old;
+        }
+        Interlocked.Increment(ref _droppedCommands);
+        return false;
     }
 
     /// <summary>Takes the next pending event, oldest first. Poll it from the game thread; nothing is called back on the render thread.</summary>
@@ -341,6 +691,9 @@ public sealed class AudioMixer
     {
         lock (_controlLock) return _events.TryDequeue(out mixerEvent);
     }
+
+    private static float TimeConstant(float ms, double rate) =>
+        ms <= 0f ? 0f : (float)Math.Exp(-1.0 / (ms * 0.001 * rate));
 
     private bool Enqueue(in Command cmd)
     {
@@ -352,231 +705,130 @@ public sealed class AudioMixer
         return false;
     }
 
-    private Command BuildPlay(in PlayParams p)
+    private static void CheckGain(float gain)
+    {
+        if (!float.IsFinite(gain) || gain < 0f) throw new ArgumentOutOfRangeException(nameof(gain), "Gain must be finite and not negative.");
+    }
+
+    private static void CheckFinite(float value, string name)
+    {
+        if (!float.IsFinite(value)) throw new ArgumentOutOfRangeException(name, "Value must be finite.");
+    }
+
+    private static void CheckPitch(float pitch)
+    {
+        if (!(pitch >= MinPitch && pitch <= MaxPitch)) throw new ArgumentOutOfRangeException(nameof(pitch), $"Pitch must be within {MinPitch} to {MaxPitch}.");
+    }
+
+    private void CheckBus(int bus, string name = "bus")
+    {
+        if ((uint)bus >= (uint)_ctlParent.Length) throw new ArgumentOutOfRangeException(name, "Bus out of range.");
+    }
+
+    // True when a signal path leads from 'from' to 'to' through routing and ducking links. Control thread, under the lock.
+    private bool Reaches(int from, int to)
+    {
+        var seen = new bool[_ctlParent.Length];
+        var stack = new Stack<int>();
+        stack.Push(from);
+        while (stack.Count > 0)
+        {
+            int x = stack.Pop();
+            if (x == to) return true;
+            if (seen[x]) continue;
+            seen[x] = true;
+            if (_ctlParent[x] >= 0) stack.Push(_ctlParent[x]);
+            for (int t = 0; t < _ctlDuckSource.Length; t++)
+                if (_ctlDuckSource[t] == x) stack.Push(t);
+        }
+        return false;
+    }
+
+    private Command BuildPlay(in PlayParams p, out int channels, out ResamplerQuality quality, out double ratio)
     {
         var src = p.Source ?? throw new ArgumentException("A source is required.", nameof(p));
-        if (src.Format.Channels is < 1 or > 2) throw new ArgumentException("Voices play mono or stereo sources.", nameof(p));
-        if (src.Format.SampleRate != _sampleRate) throw new ArgumentException($"Source rate {src.Format.SampleRate} Hz differs from the mixer's {_sampleRate} Hz; resample it first.", nameof(p));
-        if ((uint)p.Bus >= (uint)_busGain.Length) throw new ArgumentOutOfRangeException(nameof(p), "Bus out of range.");
+        channels = src.Format.Channels;
+        quality = ResamplerQuality.Linear;
+        if (channels < 1 || channels > _maxSrcChannels) throw new ArgumentException($"Sources may have 1 to {_maxSrcChannels} channels.", nameof(p));
+        if ((uint)p.Bus >= (uint)_ctlParent.Length) throw new ArgumentOutOfRangeException(nameof(p), "Bus out of range.");
         ArgumentOutOfRangeException.ThrowIfNegative(p.FadeInFrames);
-        ArgumentOutOfRangeException.ThrowIfNegative(p.Gain);
+        CheckGain(p.Gain);
+        CheckFinite(p.Pan, nameof(p));
+        CheckPitch(p.Pitch);
+        bool needsConverter = src.Format.SampleRate != _sampleRate || p.Pitch != 1f || p.VariablePitch;
+        ratio = 0;
+        if (needsConverter)
+        {
+            ratio = _sampleRate / ((double)src.Format.SampleRate * p.Pitch);
+            if (!(ratio >= _minRatio && ratio <= _maxRatio))
+                throw new ArgumentOutOfRangeException(nameof(p), $"The conversion ratio {ratio:F4} (mixer rate / source rate / pitch) is outside the converter range {_minRatio} to {_maxRatio}; widen MixerOptions.ConverterMinRatio/ConverterMaxRatio or change the pitch.");
+            bool pitched = p.Pitch != 1f || p.VariablePitch;
+            quality = p.Resampling ?? (pitched ? ResamplerQuality.Linear : ResamplerQuality.PolyphaseFast);
+            if (!Enum.IsDefined(quality)) throw new ArgumentOutOfRangeException(nameof(p), "Unknown resampler quality.");
+        }
         return new Command
         {
             Kind = CommandKind.Play, Source = src, Gain = p.Gain, Pan = Math.Clamp(p.Pan, -1f, 1f), Loop = p.Loop,
             LoopStart = p.LoopStartFrame, LoopEnd = p.LoopEndFrame, Bus = p.Bus, Priority = p.Priority,
-            StartAt = p.StartAtFrame, Frames = p.FadeInFrames,
+            StartAt = p.StartAtFrame, Frames = p.FadeInFrames, Pitch = p.Pitch, Flag = p.VariablePitch,
         };
     }
 
-    // ---------------------------------------------------------------- render side
-
-    /// <summary>
-    /// Fills <paramref name="output"/> with the next block of the mix. The frame count is implied by the span:
-    /// <c>output.Length / Channels</c> whole frames; a trailing partial frame is zeroed. The span is overwritten, not
-    /// added to. Call only from the host's audio thread, never concurrently with itself. Allocates nothing, takes
-    /// no locks and does not block; it throws nothing for any control input.
-    /// </summary>
-    /// <param name="output">Interleaved output at <see cref="SampleRate"/> and <see cref="Channels"/>.</param>
-    public void Render(Span<float> output)
+    // Converters are created on the control thread and recycled: the render thread hands retired ones back through a ring.
+    // Returns null when every converter the mixer may own is in use.
+    private IResampler? AcquireResampler(int channels, ResamplerQuality quality, double ratio)
     {
-        output.Clear();
-        int ch = _channels;
-        int total = output.Length / ch;
-        int done = 0;
-        while (done < total)
+        while (_retired.TryDequeue(out var back)) PoolPush(back);
+        int key = channels * 4 + (int)quality;
+        IResampler rs;
+        if (_pool.TryGetValue(key, out var stack) && stack.Count > 0)
         {
-            int n = Math.Min(total - done, _maxBlock);
-            var block = output.Slice(done * ch, n * ch);
-            long blockStart = _timeline;
-            DrainCommands();
-            int active = 0;
-            for (int i = 0; i < _voices.Length; i++)
-            {
-                var v = _voices[i];
-                if (!v.Active) continue;
-                MixVoice(v, block, n, blockStart);
-                if (v.Active) active++;
-            }
-            Volatile.Write(ref _activeVoices, active);
-            Volatile.Write(ref _timeline, blockStart + n);
-            done += n;
-        }
-    }
-
-    private void DrainCommands()
-    {
-        while (_commands.TryDequeue(out var c))
-        {
-            switch (c.Kind)
-            {
-                case CommandKind.Play: StartVoice(in c); break;
-                case CommandKind.Stop: { var v = Find(c.Id); if (v != null) BeginStop(v, c.Frames); break; }
-                case CommandKind.StopAll:
-                    foreach (var v in _voices) if (v.Active) BeginStop(v, c.Frames);
-                    break;
-                case CommandKind.SetGain: { var v = Find(c.Id); if (v != null) Ramp(v, c.Gain, c.Frames); break; }
-                case CommandKind.SetPan: { var v = Find(c.Id); if (v != null) v.Pan = c.Pan; break; }
-                case CommandKind.SetLoop: { var v = Find(c.Id); if (v != null) { v.Loop = c.Loop; v.LoopStart = c.LoopStart; v.LoopEnd = c.LoopEnd; } break; }
-                case CommandKind.SetBusGain: _busGain[c.Bus] = c.Gain; break;
-            }
-        }
-    }
-
-    private Voice? Find(long id)
-    {
-        foreach (var v in _voices) if (v.Active && v.Id == id) return v;
-        return null;
-    }
-
-    private static void Ramp(Voice v, float target, int frames)
-    {
-        if (frames <= 0) { v.Gain = v.GainTarget = target; v.RampLeft = 0; v.GainStep = 0; return; }
-        v.GainTarget = target;
-        v.RampLeft = frames;
-        v.GainStep = (target - v.Gain) / frames;
-    }
-
-    private void BeginStop(Voice v, int fadeFrames)
-    {
-        if (fadeFrames <= 0) { EndVoice(v); return; }
-        Ramp(v, 0f, fadeFrames);
-        v.StopAfterRamp = true;
-    }
-
-    private void StartVoice(in Command c)
-    {
-        Voice? slot = null;
-        Voice? weakest = null;
-        foreach (var v in _voices)
-        {
-            if (!v.Active) { slot = v; break; }
-            if (weakest == null || v.Priority < weakest.Priority || (v.Priority == weakest.Priority && v.Seq < weakest.Seq)) weakest = v;
-        }
-        if (slot == null)
-        {
-            if (weakest!.Priority > c.Priority)
-            {
-                Interlocked.Increment(ref _droppedPlays);
-                Post(new MixerEvent(MixerEventKind.PlayDropped, c.Id, 0));
-                return;
-            }
-            Interlocked.Increment(ref _stolen);
-            Post(new MixerEvent(MixerEventKind.VoiceStolen, weakest.Id, 0));
-            weakest.Active = false;
-            weakest.Source = null;
-            slot = weakest;
-        }
-        slot.Active = true;
-        slot.Id = c.Id;
-        slot.Seq = ++_seq;
-        slot.Source = c.Source;
-        slot.Pan = c.Pan;
-        slot.Loop = c.Loop;
-        slot.LoopStart = c.LoopStart;
-        slot.LoopEnd = c.LoopEnd;
-        slot.Bus = c.Bus;
-        slot.Priority = c.Priority;
-        slot.StartAt = c.StartAt;
-        slot.Position = 0;
-        slot.InUnderrun = false;
-        slot.StopAfterRamp = false;
-        slot.RampLeft = 0;
-        slot.GainStep = 0;
-        if (c.Frames > 0) { slot.Gain = 0f; Ramp(slot, c.Gain, c.Frames); }
-        else { slot.Gain = slot.GainTarget = c.Gain; }
-    }
-
-    private void EndVoice(Voice v)
-    {
-        v.Active = false;
-        v.Source = null;
-        Post(new MixerEvent(MixerEventKind.VoiceEnded, v.Id, 0));
-    }
-
-    private void Post(in MixerEvent e)
-    {
-        if (!_events.TryEnqueue(e)) Interlocked.Increment(ref _droppedEvents);
-    }
-
-    private void MixVoice(Voice v, Span<float> block, int frames, long blockStart)
-    {
-        int off = 0;
-        if (v.StartAt > blockStart)
-        {
-            long wait = v.StartAt - blockStart;
-            if (wait >= frames) return;
-            off = (int)wait;
-        }
-        int n = frames - off;
-        var src = v.Source!;
-        int srcCh = src.Format.Channels;
-        int got = src.ReadFrames(ref v.Position, v.Loop, v.LoopStart, v.LoopEnd, _scratch.AsSpan(0, n * srcCh), out bool underrun);
-
-        if (underrun)
-        {
-            long missing = n - got;
-            Volatile.Write(ref _underrunFrames, _underrunFrames + missing);
-            if (!v.InUnderrun)
-            {
-                Volatile.Write(ref _underrunEvents, _underrunEvents + 1);
-                Post(new MixerEvent(MixerEventKind.Underrun, v.Id, missing));
-            }
-            v.InUnderrun = true;
-        }
-        else if (got == n) v.InUnderrun = false;
-
-        // Pan weights: constant power for mono sources, balance for stereo (the louder side stays at unity).
-        float wl, wr;
-        float pan = v.Pan;
-        if (srcCh == 1)
-        {
-            double a = (pan + 1.0) * (Math.PI / 4.0);
-            wl = (float)Math.Cos(a);
-            wr = (float)Math.Sin(a);
+            rs = stack.Pop();
+            rs.Reset();
         }
         else
         {
-            wl = pan > 0f ? 1f - pan : 1f;
-            wr = pan < 0f ? 1f + pan : 1f;
+            if (_converterCount >= _maxConverters && !EvictIdleConverter()) return null;
+            rs = CreateConverter(channels, quality);
         }
-        float bus = _busGain[v.Bus];
-        wl *= bus;
-        wr *= bus;
+        try { rs.SetRatio(ratio); }
+        catch (ArgumentOutOfRangeException) { PoolPush(rs); throw; }
+        return rs;
+    }
 
-        int ch = _channels;
-        float g = v.Gain;
-        int ramp = v.RampLeft;
-        var s = _scratch;
-        for (int i = 0; i < got; i++)
+    // At the cap, an idle converter of another kind is dropped to make room, so reserved converters never lock the cap against
+    // the kinds the game actually uses.
+    private bool EvictIdleConverter()
+    {
+        foreach (var stack in _pool.Values)
         {
-            if (ramp > 0)
-            {
-                g += v.GainStep;
-                if (--ramp == 0) g = v.GainTarget;
-            }
-            int o = (off + i) * ch;
-            if (ch == 1)
-            {
-                float m = srcCh == 1 ? s[i] : 0.5f * (s[2 * i] + s[2 * i + 1]);
-                block[o] += m * g * (srcCh == 1 ? bus : 0.5f * (wl + wr));
-            }
-            else if (srcCh == 1)
-            {
-                float m = s[i] * g;
-                block[o] += m * wl;
-                block[o + 1] += m * wr;
-            }
-            else
-            {
-                block[o] += s[2 * i] * g * wl;
-                block[o + 1] += s[2 * i + 1] * g * wr;
-            }
+            if (stack.Count == 0) continue;
+            stack.Pop();
+            _converterCount--;
+            return true;
         }
-        // Frames not produced (underrun) are silence and the ramp does not advance through them.
-        v.Gain = g;
-        v.RampLeft = ramp;
+        return false;
+    }
 
-        if (got < n && !underrun) { EndVoice(v); return; }
-        if (v.StopAfterRamp && ramp == 0) EndVoice(v);
+    private IResampler CreateConverter(int channels, ResamplerQuality quality)
+    {
+        var rs = _resamplerFactory(channels, quality)
+            ?? throw new InvalidOperationException("The resampler factory returned null.");
+        if (rs.Channels != channels)
+            throw new InvalidOperationException($"The resampler factory returned a {rs.Channels}-channel converter for {channels} channels.");
+        _converterCount++;
+        return rs;
+    }
+
+    private void Release(IResampler? rs)
+    {
+        if (rs != null) PoolPush(rs);
+    }
+
+    private void PoolPush(IResampler rs)
+    {
+        int key = rs.Channels * 4 + (int)rs.Quality;
+        if (!_pool.TryGetValue(key, out var stack)) _pool[key] = stack = new Stack<IResampler>();
+        stack.Push(rs);
     }
 }

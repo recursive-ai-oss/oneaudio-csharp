@@ -3,7 +3,9 @@ using BenchmarkDotNet.Running;
 using OneAudio;
 using OneAudio.Benchmarks;
 
+if (args.Length > 0 && args[0] == "pitch-sweep") return PitchSweepProbe.Run();
 BenchmarkSwitcher.FromAssembly(typeof(ResampleBenchmarks).Assembly).Run(args);
+return 0;
 
 namespace OneAudio.Benchmarks
 {
