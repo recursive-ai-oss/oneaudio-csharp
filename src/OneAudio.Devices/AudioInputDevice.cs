@@ -56,6 +56,9 @@ public sealed class AudioInputDevice : IDisposable
     /// <summary>Backend-specific extras for diagnostics, or <see langword="null"/>.</summary>
     public string? Detail => _engine.DetailText;
 
+    /// <summary>The backend's own state word for the open stream (for example <c>awaiting_gesture</c> in a browser), or <see langword="null"/> when it has none or no device is open. Also appended to <see cref="Detail"/>.</summary>
+    public string? StateText => _engine.StateText;
+
     /// <summary>What the device has really done; see <see cref="DeviceCounters"/> for how the fields read for an input. A snapshot, safe from any thread.</summary>
     public DeviceCounters Counters => _engine.Counters();
 

@@ -20,7 +20,6 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
     private static readonly long RetryTicks = Stopwatch.Frequency / 2;
     private static readonly long DefaultPollTicks = Stopwatch.Frequency;
     private const int MaxSilentChunkFrames = 2048;
-    private const int AllocWarmupCallbacks = 8;
 
     private readonly DeviceDirection _direction;
     private readonly IAudioDeviceBackend _backend;
@@ -174,7 +173,24 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
 
     public AudioDeviceInfo? CurrentDevice => Volatile.Read(ref _stream)?.Device;
 
-    public string? DetailText => Volatile.Read(ref _stream)?.Detail;
+    public string? StateText => Volatile.Read(ref _stream)?.StateText;
+
+    /// <summary>The stream's route extras, followed by its state word when it has one.</summary>
+    public string? DetailText
+    {
+        get
+        {
+            var s = Volatile.Read(ref _stream);
+            string? detail = s?.Detail;
+            string? state = s?.StateText;
+            if (string.IsNullOrEmpty(state))
+            {
+                return detail;
+            }
+
+            return string.IsNullOrEmpty(detail) ? state : detail + "; " + state;
+        }
+    }
 
     public DeviceState State
     {
@@ -350,7 +366,7 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
         }
 
         // The probe costs two reads of a per-thread counter (about the noise of a callback's own time), so it is always on.
-        if (Interlocked.Increment(ref _callbacksSeen) > AllocWarmupCallbacks)
+        if (Interlocked.Increment(ref _callbacksSeen) > _options.AllocationWarmupBlocks)
         {
             Interlocked.Add(ref _allocBytes, GC.GetAllocatedBytesForCurrentThread() - allocBefore);
         }
@@ -760,7 +776,8 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
         // The system default changed, told by the OS or noticed by polling.
         if (_requestedId is null && _options.FollowDefault && _stream is not null)
         {
-            bool changed = Interlocked.Exchange(ref _pendingDefault, 0) != 0;
+            bool notified = Interlocked.Exchange(ref _pendingDefault, 0) != 0;
+            bool changed = notified;
             if (!changed && !_backend.NotifiesDeviceChanges && now >= _nextDefaultPoll)
             {
                 _nextDefaultPoll = now + DefaultPollTicks;
@@ -769,8 +786,11 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
 
             if (changed)
             {
+                // A stream that cannot name its device (null id) is "unknown", not "different": polling compares only when both sides are known.
+                // An explicit notice from the backend is trusted even then, because the backend saw the change.
                 string? target = _backend.GetDefault(_direction)?.Id;
-                if (target is not null && target != _currentId)
+                bool differs = _currentId is null ? notified : target != _currentId;
+                if (target is not null && differs)
                 {
                     SwitchDefaultLocked(target);
                 }
