@@ -157,7 +157,10 @@ public sealed record DeviceStreamOptions
     /// first callback. The package's own render path allocates nothing from its first callback on, but the program's source runs inside the same
     /// measurement, and work it does the first time a path is taken (a first voice, a first stream, runtime type loading and compilation) is real
     /// allocation that is not a steady-state leak. Callbacks are counted, not time, so a host that renders short blocks reaches the same count
-    /// sooner; raise this when the source needs more callbacks than that before it has touched every path. Must not be negative.
+    /// sooner; raise this when the source needs more callbacks than that before it has touched every path. On an interpreting runtime
+    /// (Mono for browser-wasm) the first use of a path allocates a few hundred bytes of runtime bookkeeping; <see cref="AudioMixer"/> spends that
+    /// when it is created, so a mixer reads 0 from its first callback, but a custom source has to reach each of its own paths during the warm-up
+    /// blocks (or be warmed up by its creator). Must not be negative.
     /// </summary>
     public int AllocationWarmupBlocks { get; init; } = 8;
 
