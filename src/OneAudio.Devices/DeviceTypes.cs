@@ -1,3 +1,5 @@
+using OneAudio.Loudness;
+
 namespace OneAudio.Devices;
 
 /// <summary>Whether a device plays sound or records it.</summary>
@@ -141,12 +143,12 @@ public sealed record DeviceStreamOptions
     /// </summary>
     public OutputLimiterMode Limiter { get; init; } = OutputLimiterMode.SoftKnee;
 
-    /// <summary>Measure BS.1770 loudness at the output (after the limiter), readable from <see cref="AudioOutputDevice.Loudness"/>. Default false.</summary>
+    /// <summary>Measure BS.1770 loudness at the output (after the limiter), readable from <see cref="AudioOutputDevice.Loudness"/> as the core's <see cref="LoudnessSnapshot"/>. Default false.</summary>
     public bool Metering { get; init; }
 
     /// <summary>
-    /// Count the bytes the render callback allocates into <see cref="DeviceCounters.RenderAllocatedBytes"/> (skipping the first few
-    /// callbacks, which still warm up). A diagnostic for tests and hosts; costs one call per block. Default false.
+    /// No longer has an effect: <see cref="DeviceCounters.RenderAllocatedBytes"/> is always kept, because the probe (two reads of a per-thread
+    /// allocation counter per callback) costs less than the noise in a callback's own time. Kept so existing code compiles.
     /// </summary>
     public bool MeasureRenderAllocations { get; init; }
 

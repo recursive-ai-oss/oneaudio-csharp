@@ -312,11 +312,11 @@ public class ManualDeviceTests
         output.Advance(Rate);
         var l = output.Loudness;
         Assert.InRange(l.MomentaryLufs, -7.5, -6.0); // 0.5 full-scale sine on both channels
-        Assert.True(l.Frames >= Rate - 256);
+        Assert.True(l.FramesMeasured >= Rate - 256);
         Assert.InRange(l.TruePeakDbtp, -6.5, -5.5);
         output.ResetLoudness();
         output.Advance(256);
-        Assert.Equal(256, output.Loudness.Frames);
+        Assert.Equal(256, output.Loudness.FramesMeasured);
     }
 
     [Fact]

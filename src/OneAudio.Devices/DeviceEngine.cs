@@ -90,6 +90,13 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
     private long _allocBytes;
     private long _callbacksSeen;
     private long _eventsDropped;
+    private int _muted;
+    private long _mutedFrames;
+    private long _deviceUnderrunsBase;
+    private long _streamDeviceUnderruns;
+    private Action<long>? _blockHook;
+    private double _maxMomentary = double.NegativeInfinity;
+    private double _maxShortTerm = double.NegativeInfinity;
 
     // Meter snapshot.
     private int _meterReset;
@@ -145,6 +152,22 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
 
     public bool HasSupervisorThread => _thread is not null;
 
+    public bool IsUserSuspended => Volatile.Read(ref _userSuspended);
+
+    public bool IsSystemSuspended => Volatile.Read(ref _systemSuspended);
+
+    public bool Muted
+    {
+        get => Volatile.Read(ref _muted) != 0;
+        set => Volatile.Write(ref _muted, value ? 1 : 0);
+    }
+
+    public Action<long>? BlockHook
+    {
+        get => Volatile.Read(ref _blockHook);
+        set => Volatile.Write(ref _blockHook, value);
+    }
+
     public FloatRing? CaptureRing => _captureRing;
 
     public string? LastError => Volatile.Read(ref _lastError);
@@ -183,8 +206,7 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
     public void Render(Span<float> interleaved)
     {
         long startTicks = Stopwatch.GetTimestamp();
-        bool measure = _options.MeasureRenderAllocations;
-        long allocBefore = measure ? GC.GetAllocatedBytesForCurrentThread() : 0;
+        long allocBefore = GC.GetAllocatedBytesForCurrentThread();
 
         int ch = _format.Channels;
         int whole = interleaved.Length / ch * ch;
@@ -195,8 +217,15 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
 
         var block = interleaved[..whole];
         long streamStart = Volatile.Read(ref _streamWritten);
+        RunHook();
         var adapter = Volatile.Read(ref _adapter);
-        if (adapter is null)
+        if (Volatile.Read(ref _muted) != 0)
+        {
+            // Silence without asking the source, so its clock stands still while muted.
+            block.Clear();
+            Interlocked.Add(ref _mutedFrames, whole / ch);
+        }
+        else if (adapter is null)
         {
             RunSource(block, streamStart);
             Interlocked.Add(ref _framesRendered, whole / ch);
@@ -219,19 +248,19 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
             Meter(block);
         }
 
-        FinishCallback(startTicks, allocBefore, measure);
+        FinishCallback(startTicks, allocBefore);
     }
 
     public void Capture(ReadOnlySpan<float> interleaved)
     {
         long startTicks = Stopwatch.GetTimestamp();
-        bool measure = _options.MeasureRenderAllocations;
-        long allocBefore = measure ? GC.GetAllocatedBytesForCurrentThread() : 0;
+        long allocBefore = GC.GetAllocatedBytesForCurrentThread();
 
         int ch = _format.Channels;
         var block = interleaved[..(interleaved.Length / ch * ch)];
         long frames = block.Length / ch;
         long streamStart = Volatile.Read(ref _streamWritten);
+        RunHook();
         float peak = 0f;
         for (int i = 0; i < block.Length; i++)
         {
@@ -268,7 +297,26 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
             }
         }
 
-        FinishCallback(startTicks, allocBefore, measure);
+        FinishCallback(startTicks, allocBefore);
+    }
+
+    /// <summary>Calls the per-block hook with the frames handed to (or received from) the device before this block; a throw is counted.</summary>
+    private void RunHook()
+    {
+        var hook = Volatile.Read(ref _blockHook);
+        if (hook is null)
+        {
+            return;
+        }
+
+        try
+        {
+            hook(Interlocked.Read(ref _framesWritten));
+        }
+        catch (Exception)
+        {
+            Interlocked.Increment(ref _faults);
+        }
     }
 
     private void RunSource(Span<float> block, long streamStart)
@@ -293,7 +341,7 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
         }
     }
 
-    private void FinishCallback(long startTicks, long allocBefore, bool measure)
+    private void FinishCallback(long startTicks, long allocBefore)
     {
         long took = Stopwatch.GetTimestamp() - startTicks;
         if (took > Volatile.Read(ref _maxRenderTicks))
@@ -301,7 +349,8 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
             Volatile.Write(ref _maxRenderTicks, took);
         }
 
-        if (measure && Interlocked.Increment(ref _callbacksSeen) > AllocWarmupCallbacks)
+        // The probe costs two reads of a per-thread counter (about the noise of a callback's own time), so it is always on.
+        if (Interlocked.Increment(ref _callbacksSeen) > AllocWarmupCallbacks)
         {
             Interlocked.Add(ref _allocBytes, GC.GetAllocatedBytesForCurrentThread() - allocBefore);
         }
@@ -321,6 +370,8 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
         Volatile.Write(ref _shortTerm, meter.ShortTermLufs);
         Volatile.Write(ref _integrated, meter.IntegratedLufs);
         Volatile.Write(ref _truePeak, meter.TruePeakDbtp);
+        Volatile.Write(ref _maxMomentary, meter.MaxMomentaryLufs);
+        Volatile.Write(ref _maxShortTerm, meter.MaxShortTermLufs);
         Interlocked.Add(ref _meteredFrames, block.Length / _format.Channels);
     }
 
@@ -333,8 +384,9 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
         }
     }
 
-    public LoudnessReading Loudness => new(
-        Volatile.Read(ref _momentary), Volatile.Read(ref _shortTerm), Volatile.Read(ref _integrated), Volatile.Read(ref _truePeak), Interlocked.Read(ref _meteredFrames));
+    public LoudnessSnapshot Loudness => new(
+        Volatile.Read(ref _momentary), Volatile.Read(ref _shortTerm), Volatile.Read(ref _integrated), Volatile.Read(ref _truePeak),
+        Volatile.Read(ref _maxMomentary), Volatile.Read(ref _maxShortTerm), Interlocked.Read(ref _meteredFrames));
 
     public void ResetLoudness()
     {
@@ -343,8 +395,13 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
 
     public void ResetPeaks()
     {
-        Volatile.Write(ref _peakWrittenBits, 0);
-        Volatile.Write(ref _peakPlayedBits, 0);
+        // Blocks the device has already finished belong to the time before the reset; take them in first so they do not show up afterwards.
+        lock (_fold)
+        {
+            FoldPlayed();
+            Volatile.Write(ref _peakWrittenBits, 0);
+            Volatile.Write(ref _peakPlayedBits, 0);
+        }
     }
 
     // ------------------------------------------------------------------ notifications (any thread, lock-free)
@@ -367,6 +424,22 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
         }
 
         Interlocked.Add(ref _xrunFramesPending, Math.Max(frames, 1));
+    }
+
+    public void NotifyDeviceUnderruns(long total)
+    {
+        // The device's own cumulative count for the stream; only ever moves forward within a stream.
+        long seen = Volatile.Read(ref _streamDeviceUnderruns);
+        while (total > seen)
+        {
+            long witnessed = Interlocked.CompareExchange(ref _streamDeviceUnderruns, total, seen);
+            if (witnessed == seen)
+            {
+                break;
+            }
+
+            seen = witnessed;
+        }
     }
 
     public void NotifyDefaultChanged() => Volatile.Write(ref _pendingDefault, 1);
@@ -426,7 +499,9 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
             latency,
             Volatile.Read(ref _maxRenderTicks) * 1000.0 / Stopwatch.Frequency,
             Interlocked.Read(ref _allocBytes),
-            Interlocked.Read(ref _eventsDropped));
+            Interlocked.Read(ref _eventsDropped),
+            Interlocked.Read(ref _mutedFrames),
+            Interlocked.Read(ref _deviceUnderrunsBase) + Interlocked.Read(ref _streamDeviceUnderruns));
     }
 
     /// <summary>Reads the device position and takes the peaks of blocks it has finished. Call under <c>_fold</c>.</summary>
@@ -874,6 +949,7 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
             FoldPlayed();
             long streamPlayed = Math.Min(s.FramesPlayed, Volatile.Read(ref _streamWritten));
             _playedBase += streamPlayed;
+            Interlocked.Add(ref _deviceUnderrunsBase, Interlocked.Exchange(ref _streamDeviceUnderruns, 0));
             Volatile.Write(ref _stream, null);
             Volatile.Write(ref _playedHint, _playedBase);
             _peaks.Clear();
@@ -922,8 +998,16 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
         {
             int n = Math.Min(frames - done, MaxSilentChunkFrames);
             var block = _silent.AsSpan(0, n * ch);
-            RunSource(block, 0);
-            Interlocked.Add(ref _framesRendered, n);
+            if (Volatile.Read(ref _muted) != 0)
+            {
+                Interlocked.Add(ref _mutedFrames, n);
+            }
+            else
+            {
+                RunSource(block, 0);
+                Interlocked.Add(ref _framesRendered, n);
+            }
+
             Interlocked.Add(ref _silentFrames, n);
             done += n;
         }

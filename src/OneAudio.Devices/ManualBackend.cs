@@ -205,6 +205,23 @@ public sealed class ManualBackend : IAudioDeviceBackend
         }
     }
 
+    /// <summary>
+    /// Receives every block of output the simulated devices consume, on the thread that calls <see cref="AudioOutputDevice.Advance"/>, with no
+    /// capacity limit: stream it to a file, a meter, a browser. The span is valid only during the call; it follows the render path's
+    /// rules (no allocation or locks) if the allocation counters matter. Independent of the recording.
+    /// </summary>
+    public Action<ReadOnlySpan<float>>? Sink { get; set; }
+
+    /// <summary>Acts out the device counting underruns of its own: every open stream reports a cumulative count that grows by <paramref name="count"/>.</summary>
+    /// <param name="count">How many underruns to add.</param>
+    public void SimulateDeviceUnderruns(int count)
+    {
+        foreach (var s in Snapshot())
+        {
+            s.AddDeviceUnderruns(count);
+        }
+    }
+
     /// <summary>Frames recorded so far (up to the capacity given at construction).</summary>
     public long RecordedFrames => Math.Min(Volatile.Read(ref _recorded), _recording is null ? 0 : _recording.Length / _recordingChannels);
 
@@ -406,6 +423,10 @@ public sealed class ManualBackend : IAudioDeviceBackend
             _owner.Forget(this);
         }
 
+        private long _deviceUnderruns;
+
+        public void AddDeviceUnderruns(int count) => Engine.NotifyDeviceUnderruns(Interlocked.Add(ref _deviceUnderruns, count));
+
         public void Lose()
         {
             Volatile.Write(ref _lost, 1);
@@ -432,6 +453,7 @@ public sealed class ManualBackend : IAudioDeviceBackend
                     {
                         Engine.Render(block);
                         _owner.Record(block);
+                        _owner.Sink?.Invoke(block);
                     }
                     else
                     {

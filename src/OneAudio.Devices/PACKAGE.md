@@ -11,7 +11,7 @@ mixer.Play(Audio.Load("shot.ogg"));
 Console.WriteLine(output.Counters);                    // frames written and played, peak, underruns, losses, reopens
 ```
 
-See the repository's `docs/api.md` for the full device API.
+The full device API is described in [docs/api.md](https://github.com/recursive-ai-oss/oneaudio-csharp/blob/main/docs/api.md).
 
 ## Windows (WASAPI)
 

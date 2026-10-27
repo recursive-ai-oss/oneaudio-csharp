@@ -37,7 +37,8 @@ public interface IAudioDeviceBackend
     AudioDeviceInfo? GetDefault(DeviceDirection direction);
 
     /// <summary>
-    /// Opens a stream without starting it. Never throws for an unavailable device: failure returns false with a reason. The stream must
+    /// Opens a stream without starting it. The caller owns the stream and must dispose it (the output and input devices do, on every path);
+    /// disposing releases the device and guarantees no callback is running. Never throws for an unavailable device: failure returns false with a reason. The stream must
     /// honour <see cref="DeviceStreamOptions.SampleRate"/> and <see cref="DeviceStreamOptions.Channels"/> (converting in the operating
     /// system or itself) and run in 32-bit float. After <see cref="IOpenDevice.Start"/> it calls <paramref name="engine"/>
     /// from the device thread.
@@ -131,6 +132,16 @@ public interface IDeviceEngine
     /// <summary>The device ran dry (output) or overflowed (input) by about this many frames.</summary>
     /// <param name="frames">The size of the gap, or 0 when unknown.</param>
     void NotifyXrun(int frames);
+
+    /// <summary>
+    /// Reports the device's own cumulative underrun count for this stream, for backends whose audio API counts them (an xrun counter);
+    /// it becomes <see cref="DeviceCounters.DeviceUnderruns"/>, summed over reopens. Only increases are taken. Optional: a backend with no such
+    /// counter never calls it. Implementations of <see cref="IDeviceEngine"/> outside this package need not provide it.
+    /// </summary>
+    /// <param name="total">The device's count since this stream opened.</param>
+    void NotifyDeviceUnderruns(long total)
+    {
+    }
 
     /// <summary>The system changed its default device for this direction. Only the engine's own follow-default policy decides what happens next.</summary>
     void NotifyDefaultChanged();

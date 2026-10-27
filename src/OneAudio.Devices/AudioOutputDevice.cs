@@ -1,3 +1,5 @@
+using OneAudio.Loudness;
+
 namespace OneAudio.Devices;
 
 /// <summary>
@@ -84,7 +86,42 @@ public sealed class AudioOutputDevice : IDisposable
     public DeviceCounters Counters => _engine.Counters();
 
     /// <summary>The loudness at the output after the limiter; all <see cref="double.NegativeInfinity"/> unless <see cref="DeviceStreamOptions.Metering"/> is on.</summary>
-    public LoudnessReading Loudness => _engine.Loudness;
+    public LoudnessSnapshot Loudness => _engine.Loudness;
+
+    /// <summary>
+    /// True after <see cref="Suspend"/> until <see cref="Resume"/>. Read it instead of mirroring state from events. <see cref="State"/> is
+    /// <see cref="DeviceState.Suspended"/> when this or <see cref="IsSystemSuspended"/> is true.
+    /// </summary>
+    public bool IsSuspended => _engine.IsUserSuspended;
+
+    /// <summary>
+    /// True while the system has the device taken away (an interruption such as a call, or the app in the background on a phone), between the
+    /// <see cref="DeviceEventKind.Interrupted"/> and <see cref="DeviceEventKind.Resumed"/> events.
+    /// </summary>
+    public bool IsSystemSuspended => _engine.IsSystemSuspended;
+
+    /// <summary>
+    /// When true the device is fed silence without asking the source for audio, so the source's clock (a mixer's timeline, its voices) stands
+    /// still; set false and it continues where it stopped. The cut is immediate: fade with the mixer's master gain first if a click matters.
+    /// <see cref="DeviceCounters.MutedFrames"/> counts the silence; the rest of the counters keep saying what was played (<see cref="DeviceCounters.PeakPlayed"/>
+    /// stays put). Default false. Safe from any thread.
+    /// </summary>
+    public bool Muted
+    {
+        get => _engine.Muted;
+        set => _engine.Muted = value;
+    }
+
+    /// <summary>
+    /// Called on the device thread at the start of every block, before the source renders it, with the number of frames handed to the device
+    /// so far (<see cref="DeviceCounters.FramesWritten"/>, which keeps counting across reopens). It follows the same rules as the source: no
+    /// allocation, no lock, no blocking; a throw is caught and counted in <see cref="DeviceCounters.CallbackFaults"/>. Null (the default) means none.
+    /// </summary>
+    public Action<long>? BlockHook
+    {
+        get => _engine.BlockHook;
+        set => _engine.BlockHook = value;
+    }
 
     /// <summary>Clears the meter's history (integrated loudness, true peak) at the next block.</summary>
     public void ResetLoudness() => _engine.ResetLoudness();
@@ -120,7 +157,12 @@ public sealed class AudioOutputDevice : IDisposable
     /// <exception cref="ObjectDisposedException">The output was disposed.</exception>
     public void Start() => _engine.Start();
 
-    /// <summary>Stops the device without closing it (an app moving to the background); nothing renders until <see cref="Resume"/>.</summary>
+    /// <summary>
+    /// Stops the device without closing it (an app moving to the background); nothing renders until <see cref="Resume"/>. The source's clock stops
+    /// (no frames are rendered, so <see cref="DeviceCounters.FramesRendered"/> and <see cref="DeviceCounters.FramesWritten"/> hold). The device's clock
+    /// stops once what was already queued has played out: <see cref="DeviceCounters.FramesPlayed"/> catches up with <see cref="DeviceCounters.FramesWritten"/> on
+    /// backends that drain (ALSA) and then holds. In manual mode <see cref="Advance"/> returns 0.
+    /// </summary>
     public void Suspend() => _engine.Suspend();
 
     /// <summary>Starts the device again after <see cref="Suspend"/>.</summary>
