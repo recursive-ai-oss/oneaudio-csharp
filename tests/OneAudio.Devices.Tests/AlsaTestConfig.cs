@@ -45,9 +45,14 @@ internal static partial class AlsaTestConfig
             }
 
             File.WriteAllBytes(input, bytes);
+            // ONEAUDIO_TEST_NO_DEFAULT_DEVICE=1 mimics a host without a sound card (a hosted CI runner): the default PCM points at a card
+            // that does not exist and carries no description, so the tests have to cope with a missing default the way such a host does.
+            string noDefault = Environment.GetEnvironmentVariable("ONEAUDIO_TEST_NO_DEFAULT_DEVICE") == "1"
+                ? "pcm.!default { type plug slave.pcm \"hw:99\" }\nctl.!default { type hw card 99 }\n"
+                : string.Empty;
             File.WriteAllText(
                 Path.Combine(dir, ".asoundrc"),
-                $$"""
+                noDefault + $$"""
                 pcm.{{CaptureDevice}} {
                   type file
                   slave.pcm "null"

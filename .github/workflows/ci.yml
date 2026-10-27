@@ -87,4 +87,4 @@ jobs:
           dotnet pack src/OneAudio/OneAudio.csproj -c Release -o nupkg
           dotnet pack src/OneAudio.Devices/OneAudio.Devices.csproj -c Release -o nupkg
       - name: List package contents
-        run: unzip -l nupkg/*.nupkg
+        run: for p in nupkg/*.nupkg; do unzip -l "$p"; done

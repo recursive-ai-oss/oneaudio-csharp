@@ -70,6 +70,7 @@ internal static class DeviceSmoke
                 Console.WriteLine("coreaudio: " + real.State + " " + rc);
             }
         }
+        if (WasapiSmoke.Run() is var wasapi and not 0) return wasapi;
 
         _ = AudioDevices.IsAvailable;
         return 0;
