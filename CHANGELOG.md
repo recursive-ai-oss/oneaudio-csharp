@@ -5,6 +5,14 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-27
+
+Device playback and capture, in the new `RecursiveAI.OneAudio.Devices` package (same version as the core package).
+
+What has been checked on real hardware so far: ALSA playback and capture on Linux (PipeWire); Core Audio playback on macOS, including following a
+change of the default output, and the iOS simulator. Not yet on real hardware: WASAPI (checked by unit tests and on Windows CI runners, which
+have no audio device), Core Audio capture from a real microphone, and an iOS device.
+
 ### Added
 
 - `IAudioSource` (sample rate, channels, `Render`), implemented by `AudioMixer`: anything an output device can pull audio from.
@@ -26,11 +34,6 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 - `BlockHook` on both devices: a per-block callback with the frames handed over so far.
 - `ManualBackend.Sink`: every output block streamed to a callback with no capacity limit.
 - `AudioOutputDevice.Loudness` returns the core's `LoudnessSnapshot` (with the maxima) instead of a type of its own; `LoudnessReading` is gone.
-
-### Fixed
-
-- `ResetPeaks` could leave the peaks of blocks the device had already finished to reappear afterwards; they are taken in first.
-- A source whose rate or channel count differed from the options' defaults (48 kHz stereo) failed to open on backends, which read the format from the options; the source's format is now what the backend is asked for.
 
 ## [1.1.0] - 2026-10-26
 
