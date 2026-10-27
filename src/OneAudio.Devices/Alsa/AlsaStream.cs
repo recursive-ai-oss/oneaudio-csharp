@@ -5,8 +5,9 @@ using OneAudio.Devices.Interop;
 namespace OneAudio.Devices;
 
 /// <summary>
-/// One open ALSA PCM. A thread of its own asks the engine for a period of audio, writes it (blocking while the device buffer is full, which
-/// paces the thread) and then reads the device's delay to learn how much of what it wrote has really been played.
+/// One open ALSA PCM. For playback a thread of its own asks the engine for a period of audio, writes it (blocking while the device buffer is
+/// full, which paces the thread) and then reads the device's delay to learn how much of what it wrote has really been played. For capture the
+/// thread reads a period (blocking until the device has it) and hands it to the engine.
 /// </summary>
 internal sealed class AlsaStream : IOpenDevice
 {
@@ -147,10 +148,71 @@ internal sealed class AlsaStream : IOpenDevice
             _ = AlsaNative.Prepare(_pcm);
         }
 
-        if (WriteBlock())
+        if (_direction == DeviceDirection.Output ? WriteBlock() : ReadBlock())
         {
             Refresh();
         }
+    }
+
+    /// <summary>Captures one period (blocking until the device has it) and hands it to the engine.</summary>
+    private bool ReadBlock()
+    {
+        int frames = PeriodFrames;
+        int ch = _channels;
+        int done = 0;
+        int failures = 0;
+        while (done < frames)
+        {
+            if (Volatile.Read(ref _quit) != 0)
+            {
+                return false;
+            }
+
+            int remaining = frames - done;
+            nint n = _short is null
+                ? AlsaNative.ReadI(_pcm, _buffer.AsSpan(done * ch, remaining * ch), (nuint)remaining)
+                : AlsaNative.ReadI(_pcm, _short.AsSpan(done * ch, remaining * ch), (nuint)remaining);
+            if (n >= 0)
+            {
+                done += (int)n;
+                failures = 0;
+                continue;
+            }
+
+            int error = (int)n;
+            if (error == -AlsaNative.Eintr)
+            {
+                continue;
+            }
+
+            if (error == -AlsaNative.Epipe || error == -AlsaNative.Estrpipe)
+            {
+                // The device overran: audio was lost between reads.
+                _engine.NotifyXrun(0);
+                if (++failures > MaxRecoveries || AlsaNative.Recover(_pcm, error, 1) < 0)
+                {
+                    Lose("the device could not recover from an overrun");
+                    return false;
+                }
+
+                continue;
+            }
+
+            Lose($"snd_pcm_readi failed: errno {-error}");
+            return false;
+        }
+
+        if (_short is not null)
+        {
+            for (int i = 0; i < _short.Length; i++)
+            {
+                _buffer[i] = _short[i] * (1f / 32768f);
+            }
+        }
+
+        Interlocked.Add(ref _written, frames);
+        _engine.Capture(_buffer);
+        return true;
     }
 
     private bool WriteBlock()
@@ -222,6 +284,14 @@ internal sealed class AlsaStream : IOpenDevice
     private void Refresh()
     {
         long written = Volatile.Read(ref _written);
+        if (_direction == DeviceDirection.Input)
+        {
+            // Captured frames are those the program has been given; the device's delay is what waits in its buffer to be read.
+            Volatile.Write(ref _queued, AlsaNative.Delay(_pcm, out nint waiting) == 0 ? (int)Math.Clamp(waiting, 0, BufferFrames) : 0);
+            Volatile.Write(ref _played, written);
+            return;
+        }
+
         long queued;
         if (AlsaNative.Delay(_pcm, out nint delay) == 0)
         {

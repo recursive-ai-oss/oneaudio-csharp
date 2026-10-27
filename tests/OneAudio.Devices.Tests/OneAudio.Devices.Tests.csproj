@@ -4,6 +4,8 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Two test-only calls (setenv, snd_config_update) are source-generated P/Invokes. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <NoWarn>$(NoWarn);CA1707;CA1861;xUnit1051;xUnit1031</NoWarn>
     <!-- The allocation tests read GC.GetAllocatedBytesForCurrentThread around calls; a concurrent GC would shift that counter. -->
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>

@@ -14,7 +14,7 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
   played peak, underruns, losses, reopens), `AudioDevices`, the `IAudioDeviceBackend` seam, and `ManualBackend` for tests and offline runs. The one-call
   layer is `Audio.Play(mixer)`, `Audio.CreateOutput` and `Audio.CreateInput`, as C# 14 extension members on `Audio`.
 - `AlsaBackend` (Linux playback through ALSA, including PipeWire and PulseAudio through their ALSA plug-ins): enumeration, period and buffer negotiation, float or 16-bit,
-  underrun recovery, device position from `snd_pcm_delay`.
+  underrun recovery, device position from `snd_pcm_delay`, and capture (`Audio.CreateInput`, callback or `Read`).
 
 ## [1.1.0] - 2026-10-26
 
