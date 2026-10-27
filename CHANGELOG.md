@@ -10,8 +10,10 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 Device playback and capture, in the new `RecursiveAI.OneAudio.Devices` package (same version as the core package).
 
 What has been checked on real hardware so far: ALSA playback and capture on Linux (PipeWire); Core Audio playback on macOS, including following a
-change of the default output, and the iOS simulator. Not yet on real hardware: WASAPI (checked by unit tests and on Windows CI runners, which
-have no audio device), Core Audio capture from a real microphone, and an iOS device.
+change of the default output; and playback on an iPad (iPadOS 17, NativeAOT) through the speaker, with the device clock, peaks and zero
+underruns and allocations confirmed, and a simulated audio-session interruption suspending and resuming the stream. Not yet on real hardware:
+WASAPI (checked by unit tests and on Windows CI runners, which have no audio device), capture from a real microphone on macOS and iOS, and a
+real system interruption on iOS (a call or another app taking the audio session).
 
 ### Added
 
