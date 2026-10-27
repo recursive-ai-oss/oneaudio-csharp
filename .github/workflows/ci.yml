@@ -43,6 +43,11 @@ jobs:
           echo "ONEAUDIO_CORPUS=$RUNNER_TEMP/corpus" >> "$GITHUB_ENV"
       - name: Test (tests that need corpora or reference tools skip when those are absent)
         run: dotnet test --project tests/OneAudio.Tests/OneAudio.Tests.csproj -c Release --no-build
+      - name: Test the device layer (manual and fake backends; real-device tests skip unless asked for)
+        run: dotnet test --project tests/OneAudio.Devices.Tests/OneAudio.Devices.Tests.csproj -c Release --no-build
+      - name: Repository rules (no package references, unsafe code only where allowed)
+        if: ${{ matrix.name == 'linux-x64' }}
+        run: tools/check-repo.sh
 
   aot-smoke:
     name: NativeAOT publish (${{ matrix.rid }})
@@ -78,6 +83,8 @@ jobs:
         with:
           global-json-file: global.json
       - name: Pack (warnings are errors)
-        run: dotnet pack src/OneAudio/OneAudio.csproj -c Release -o nupkg
+        run: |
+          dotnet pack src/OneAudio/OneAudio.csproj -c Release -o nupkg
+          dotnet pack src/OneAudio.Devices/OneAudio.Devices.csproj -c Release -o nupkg
       - name: List package contents
         run: unzip -l nupkg/*.nupkg

@@ -1,9 +1,11 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/OneAudio/OneAudio.csproj" />
+    <Project Path="src/OneAudio.Devices/OneAudio.Devices.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/OneAudio.Tests/OneAudio.Tests.csproj" />
+    <Project Path="tests/OneAudio.Devices.Tests/OneAudio.Devices.Tests.csproj" />
     <Project Path="tests/OneAudio.AotSmoke/OneAudio.AotSmoke.csproj" />
     <Project Path="tests/OneAudio.AotSize/OneAudio.AotSize.csproj" />
   </Folder>

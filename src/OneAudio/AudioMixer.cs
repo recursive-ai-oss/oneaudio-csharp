@@ -340,7 +340,7 @@ public readonly record struct MixerEvent(MixerEventKind Kind, long VoiceId, long
 /// <item><description><b>Output.</b> The mix is summed, not clipped, unless the master limiter is on.</description></item>
 /// </list>
 /// </summary>
-public sealed partial class AudioMixer
+public sealed partial class AudioMixer : IAudioSource
 {
     /// <summary>Lowest accepted <see cref="PlayParams.Pitch"/> (four octaves down).</summary>
     public const float MinPitch = 1f / 16f;

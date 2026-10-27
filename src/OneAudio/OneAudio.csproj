@@ -2,13 +2,13 @@
   <PropertyGroup>
     <PackageId>$(OneAudioPackageId)</PackageId>
     <!-- The release workflow checks the tag against this; pass -p:Version=... to override. -->
-    <Version Condition="'$(Version)' == ''">1.1.0</Version>
+    <Version Condition="'$(Version)' == ''">1.2.0</Version>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
     <Description>Audio decode, encode, resample, mix and analyse for .NET, with no dependencies beyond the base class library.</Description>
-    <!-- Kernels/ is the only place unsafe code is allowed. It lives in this assembly, and AllowUnsafeBlocks
-         stays false until a kernel needs it. When one does, the kernels move to their own internal assembly
-         so the parsing code can never be compiled with unsafe enabled. -->
+    <!-- Kernels/ is the only place unsafe code is allowed in this assembly, and AllowUnsafeBlocks stays false until a kernel
+         needs it. When one does, the kernels move to their own internal assembly so the parsing code can never be compiled
+         with unsafe enabled. The device package (src/OneAudio.Devices) allows unsafe code in its Interop/ folder only. -->
     <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
     <PackageProjectUrl>https://github.com/recursive-ai-oss/oneaudio-csharp</PackageProjectUrl>

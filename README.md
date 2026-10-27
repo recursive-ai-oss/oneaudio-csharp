@@ -13,7 +13,8 @@ Package id `RecursiveAI.OneAudio`, namespace `OneAudio`. License: MIT OR Apache-
 - **Resampling:** `Polyphase` (Kaiser-windowed sinc), `PolyphaseFast` and `Linear`, independent of how the input is split into blocks.
 - **The mixer** (`AudioMixer`): voices, a bus graph with sub-mixes, ducking, multichannel mapping, per-voice pitch, gain, pan, loops, fades, crossfade, voice cap with priority, streaming sources with a decode-ahead pump and underrun accounting, and low-pass / high-pass filters, a reverb and a lookahead limiter. The render callback allocates nothing and takes no locks.
 - **Loudness** (`LoudnessMeter`): BS.1770-5 / EBU R 128 momentary, short-term, integrated, loudness range and true peak, any sample rate, allocation-free; a normalisation gain helper.
-- Not included: device output, spatial audio, MIDI, AAC, MP3 Layers I and II, MP3 and Vorbis encoding.
+- **Devices** (`RecursiveAI.OneAudio.Devices`, a separate package): `Audio.Play(mixer)` plays on the default output device and `Audio.CreateInput()` records from the default input, with device enumeration, default-device following, reopening after a lost device, and counters read from the device's own position (frames written and played, played peak, underruns, losses, reopens). ALSA on Linux is in; WASAPI and Core Audio are not yet.
+- Not included: spatial audio, MIDI, AAC, MP3 Layers I and II, MP3 and Vorbis encoding.
 
 ## Quick look
 
@@ -72,8 +73,10 @@ The API is described in [docs/api.md](docs/api.md).
 
 | Path | Contents |
 |---|---|
-| `src/OneAudio/` | the library; `Kernels/` is the only place unsafe code may live |
+| `src/OneAudio/` | the library; `Kernels/` is the only place unsafe code may live in it |
+| `src/OneAudio.Devices/` | audio devices (playback and capture, `RecursiveAI.OneAudio.Devices`); `Interop/` is the only place unsafe code may live in it |
 | `tests/OneAudio.Tests/` | xUnit v3 tests |
+| `tests/OneAudio.Devices.Tests/` | xUnit v3 tests for the device layer |
 | `tests/OneAudio.AotSmoke/` | NativeAOT console app: open WAV, decode, mix |
 | `tests/OneAudio.AotSize/` | three tiny NativeAOT apps for comparing published size (`-p:Variant=` default, kit or wav) |
 | `bench/OneAudio.Benchmarks/` | BenchmarkDotNet |

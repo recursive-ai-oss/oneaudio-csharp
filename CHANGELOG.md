@@ -5,6 +5,17 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+### Added
+
+- `IAudioSource` (sample rate, channels, `Render`), implemented by `AudioMixer`: anything an output device can pull audio from.
+- A new package, `RecursiveAI.OneAudio.Devices`, versioned in step with the core package: device playback and capture. This first part is the backend-independent
+  layer: `AudioOutputDevice` and `AudioInputDevice` (callbacks on the device thread, a limiter, an optional BS.1770 meter, default-device following, reopen after a
+  lost device, silent real-time pacing while no device is open, events), `DeviceCounters` (frames rendered, written and played from the device's own position,
+  played peak, underruns, losses, reopens), `AudioDevices`, the `IAudioDeviceBackend` seam, and `ManualBackend` for tests and offline runs. The one-call
+  layer is `Audio.Play(mixer)`, `Audio.CreateOutput` and `Audio.CreateInput`, as C# 14 extension members on `Audio`.
+- `AlsaBackend` (Linux playback through ALSA, including PipeWire and PulseAudio through their ALSA plug-ins): enumeration, period and buffer negotiation, float or 16-bit,
+  underrun recovery, device position from `snd_pcm_delay`, and capture (`Audio.CreateInput`, callback or `Read`).
+
 ## [1.1.0] - 2026-10-26
 
 ### Added
