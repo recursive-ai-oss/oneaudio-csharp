@@ -1,6 +1,6 @@
 name: release
 
-# Publishes the NuGet package when a version tag is pushed. nuget.org trusts this
+# Publishes the NuGet packages when a version tag is pushed. nuget.org trusts this
 # workflow through Trusted Publishing: the job exchanges its GitHub identity token for
 # a short-lived API key, so no key is stored in the repository or its secrets.
 #
@@ -89,11 +89,14 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           # The version is whatever the project builds; the tag has to say the same.
-          version=$(dotnet msbuild src/OneAudio -getProperty:PackageVersion | tr -d '[:space:]')
-          if [ "v$version" != "$TAG" ]; then
-            echo "::error::tag $TAG does not match the package version $version"
-            exit 1
-          fi
+          # Both packages ship in lockstep, so both must build the tagged version.
+          for project in src/OneAudio src/OneAudio.Devices; do
+            version=$(dotnet msbuild "$project" -getProperty:PackageVersion | tr -d '[:space:]')
+            if [ "v$version" != "$TAG" ]; then
+              echo "::error::tag $TAG does not match the package version $version of $project"
+              exit 1
+            fi
+          done
 
       # A tag that does not build and pass its tests never publishes.
       - name: Build
@@ -102,9 +105,10 @@ jobs:
         run: dotnet test --project tests/OneAudio.Tests/OneAudio.Tests.csproj -c Release --no-build --results-directory "$ONEAUDIO_ARTIFACTS/TestResults"
 
       - name: Pack
-        # The package and its symbols (.snupkg), from the binaries the tests ran on.
+        # The core and device packages and their symbols (.snupkg), from the binaries the tests ran on.
         run: |
           dotnet pack src/OneAudio -c Release --no-build -o "$RUNNER_TEMP/packages"
+          dotnet pack src/OneAudio.Devices -c Release --no-build -o "$RUNNER_TEMP/packages"
           ls -l "$RUNNER_TEMP/packages"
 
       - name: Attest build provenance
