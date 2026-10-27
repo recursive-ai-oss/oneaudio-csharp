@@ -77,6 +77,12 @@ internal static class PlatformBackends
 {
     public static IAudioDeviceBackend? Create()
     {
+        // Android first: a NativeAOT program built for Android runs on the Linux runtime and would otherwise look for ALSA.
+        if (AAudioBackend.IsAndroidProcess())
+        {
+            return new AAudioBackend();
+        }
+
         if (OperatingSystem.IsLinux() || OperatingSystem.IsFreeBSD())
         {
             return CreateLinux();
