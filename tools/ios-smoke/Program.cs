@@ -59,7 +59,9 @@ using (var output = AudioOutputDevice.Open(source, new DeviceStreamOptions { App
         return Fail("nothing played: " + output.Counters);
     }
 
+    Thread.Sleep(1500); // a steady stretch of playback; the device clock must keep advancing
     var running = output.Counters;
+    Console.WriteLine($"clock: played {output.Counters.FramesPlayed} frames after {running.FramesWritten} written");
     Console.WriteLine("output running: " + running);
     Console.WriteLine("detail: " + output.Detail);
     if (running.PeakPlayed < 0.002f || running.Underruns != 0 || running.RenderAllocatedBytes != 0)
@@ -95,6 +97,18 @@ using (var output = AudioOutputDevice.Open(source, new DeviceStreamOptions { App
     {
         return Fail("counters after resume " + resumed);
     }
+}
+
+Console.WriteLine("output closed");
+
+// A fresh app on a real device would ask the user before it may capture (and is killed outright without a microphone usage
+// description), so capture runs on the simulator, or on a device only when asked with --input.
+bool simulator = ObjCRuntime.Runtime.Arch == ObjCRuntime.Arch.SIMULATOR;
+if (args.Contains("--no-input") || (!simulator && !args.Contains("--input")))
+{
+    Console.WriteLine("input: skipped (needs the user permission prompt on a device; pass --input to try)");
+    Console.WriteLine("ios-smoke: ok");
+    return 0;
 }
 
 using (var input = AudioInputDevice.Open(new DeviceStreamOptions { SampleRate = 16_000, Channels = 1 }, backend))
