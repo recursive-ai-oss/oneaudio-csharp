@@ -5,6 +5,22 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-27
+
+A patch release for `RecursiveAI.OneAudio.Devices`; the core package changes only its version number. The API changes are additive.
+
+What has been checked on real hardware is unchanged from 1.2.0 (see below); the fixes here are covered by tests over the manual backend and a stream that cannot name its device.
+
+### Fixed
+
+- A stream whose backend cannot name its device (`IOpenDevice.Device` is `null`, as in a browser audio context) was taken for a change of the default device on every poll, so the stream was reopened about once a second and counted as a default switch. `null` now means "unknown": the package compares the stream's device with the default only when both are known. A backend that sees the default change itself still says so with `NotifyDefaultChanged`, and that is honoured. The meaning of `null` is documented on `IOpenDevice.Device`.
+- `DeviceCounters.RenderAllocatedBytes` could read a few hundred bytes on a host that steps a manual device in short blocks, because the program's own source did first-use work after the eight callbacks the probe skipped. The package's render path itself allocates nothing from the first callback (now tested with 480-frame blocks, with and without rate conversion). The skipped count is now an option, below.
+
+### Added
+
+- `IOpenDevice.StateText` (a default interface member returning `null`, so existing backends are unaffected): a short state word such as `awaiting_gesture`. It is exposed as `AudioOutputDevice.StateText` and `AudioInputDevice.StateText` and appended to `Detail` after the route extras.
+- `DeviceStreamOptions.AllocationWarmupBlocks` (default 8, the previous fixed value): how many callbacks `RenderAllocatedBytes` ignores at the start of a stream.
+
 ## [1.2.0] - 2026-10-27
 
 Device playback and capture, in the new `RecursiveAI.OneAudio.Devices` package (same version as the core package).

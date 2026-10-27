@@ -82,6 +82,9 @@ public sealed class AudioOutputDevice : IDisposable
     /// <summary>Backend-specific extras for diagnostics (route, session category), or <see langword="null"/>.</summary>
     public string? Detail => _engine.DetailText;
 
+    /// <summary>The backend's own state word for the open stream (for example <c>awaiting_gesture</c> in a browser), or <see langword="null"/> when it has none or no device is open. Also appended to <see cref="Detail"/>.</summary>
+    public string? StateText => _engine.StateText;
+
     /// <summary>What the device has really done. A snapshot; safe from any thread, allocation-free.</summary>
     public DeviceCounters Counters => _engine.Counters();
 
@@ -208,5 +211,6 @@ internal static class DeviceValidation
         ArgumentOutOfRangeException.ThrowIfNegative(options.BufferFrames);
         ArgumentOutOfRangeException.ThrowIfLessThan(options.LatencyMilliseconds, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(options.CaptureBufferMilliseconds, 10);
+        ArgumentOutOfRangeException.ThrowIfNegative(options.AllocationWarmupBlocks);
     }
 }

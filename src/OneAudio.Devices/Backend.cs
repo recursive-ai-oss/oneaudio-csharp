@@ -79,7 +79,12 @@ public interface IOpenDevice : IDisposable
     /// <summary>The format the stream runs at (equal to the one asked for).</summary>
     AudioDeviceFormat Format { get; }
 
-    /// <summary>The device this stream really opened.</summary>
+    /// <summary>
+    /// The device this stream really opened, or <see langword="null"/> when the backend cannot name it (a browser's audio context, say).
+    /// Null means "unknown", not "different": the package never reads it as a change of the default device, so it neither reopens the
+    /// stream nor counts a default switch because of it. Polling compares the stream's device with <see cref="IAudioDeviceBackend.GetDefault"/>
+    /// only when both are known; a backend that can see the default change says so with <see cref="IDeviceEngine.NotifyDefaultChanged"/>.
+    /// </summary>
     AudioDeviceInfo? Device { get; }
 
     /// <summary>The negotiated period in frames.</summary>
@@ -99,6 +104,13 @@ public interface IOpenDevice : IDisposable
 
     /// <summary>Route and session extras for diagnostics, or <see langword="null"/>.</summary>
     string? Detail { get; }
+
+    /// <summary>
+    /// A short, backend-defined state word for diagnostics, such as <c>awaiting_gesture</c> for a browser context that is waiting for a user
+    /// gesture before it may play; <see langword="null"/> (the default) when the backend has nothing to say. It is shown after the route
+    /// extras in <see cref="AudioOutputDevice.Detail"/> and on its own as <see cref="AudioOutputDevice.StateText"/>. Read from control threads; it may allocate.
+    /// </summary>
+    string? StateText => null;
 
     /// <summary>Starts the device's callbacks. Returns false with a reason when the device refuses.</summary>
     bool Start(out string reason);
