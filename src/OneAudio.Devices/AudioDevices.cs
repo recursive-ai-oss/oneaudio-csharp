@@ -99,7 +99,7 @@ internal static class PlatformBackends
 
     private static IAudioDeviceBackend? CreateApple() => null;
 
-    private static IAudioDeviceBackend? CreateWindows() => null;
+    private static WasapiBackend CreateWindows() => new();
 }
 
 /// <summary>The backend of a platform with no audio support: lists nothing and opens nothing, so devices run silent.</summary>

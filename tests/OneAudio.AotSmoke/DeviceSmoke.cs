@@ -50,6 +50,8 @@ internal static class DeviceSmoke
             if (real.State != DeviceState.Running || real.Counters.FramesPlayed < 4800) return Fail("alsa null " + real.Counters + " " + real.LastError);
         }
 
+        if (WasapiSmoke.Run() is var wasapi and not 0) return wasapi;
+
         _ = AudioDevices.IsAvailable;
         return 0;
     }
