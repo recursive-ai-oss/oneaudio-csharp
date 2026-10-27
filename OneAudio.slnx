@@ -5,6 +5,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/OneAudio.Tests/OneAudio.Tests.csproj" />
     <Project Path="tests/OneAudio.AotSmoke/OneAudio.AotSmoke.csproj" />
+    <Project Path="tests/OneAudio.AotSize/OneAudio.AotSize.csproj" />
   </Folder>
   <Folder Name="/bench/">
     <Project Path="bench/OneAudio.Benchmarks/OneAudio.Benchmarks.csproj" />

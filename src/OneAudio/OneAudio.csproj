@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>$(OneAudioPackageId)</PackageId>
+    <!-- The release workflow checks the tag against this; pass -p:Version=... to override. -->
+    <Version Condition="'$(Version)' == ''">1.1.0</Version>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
     <Description>Audio decode, encode, resample, mix and analyse for .NET, with no dependencies beyond the base class library.</Description>

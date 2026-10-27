@@ -6,6 +6,7 @@ Package id `RecursiveAI.OneAudio`, namespace `OneAudio`. License: MIT OR Apache-
 
 ## What works today
 
+- **One-call layer** (`Audio`): `Load`, `Open`, `mixer.Play(path)` / `PlayStream`, `Transcode`, `Resample`, `Measure`, `Normalize`, with every codec registered by default.
 - Format-detecting open (`AudioDecoder.Open`) with explicit registration of containers and codecs (`AddWav`, `AddOgg`, `AddVorbis`, `AddOpus`, `AddFlac`, `AddMp3`), so unused codecs trim away.
 - **Decode:** WAV / RF64 (PCM 8/16/24/32-bit, IEEE float 32/64, `WAVE_FORMAT_EXTENSIBLE`), Ogg (chained streams, seeking), Vorbis, Opus, FLAC (native and in Ogg, bit-exact integer reads, STREAMINFO MD5 check) and MP3 (MPEG-1/2/2.5 Layer III, ID3v2, Xing/LAME gapless). Streaming into caller-provided spans, sample-accurate seeking everywhere.
 - **Encode:** WAV / RF64 (`WavEncoder`), FLAC levels 0 to 8 (`FlacEncoder`) and Opus (`OpusEncoder`, `OpusMultistreamEncoder`, Ogg Opus writer `OpusFileWriter`). Encoders produce identical bytes for identical input on a platform.
@@ -17,16 +18,53 @@ Package id `RecursiveAI.OneAudio`, namespace `OneAudio`. License: MIT OR Apache-
 ## Quick look
 
 ```csharp
+using OneAudio;
+
+var clip = Audio.Load("hit.wav");                          // any supported format, decoded to float (WAV, Ogg, Vorbis, Opus, FLAC, MP3)
+var mixer = Audio.CreateMixer();                           // 48 kHz stereo, 64 voices, limiter on the master
+mixer.Play("hit.wav", new PlayOptions { Gain = 0.8f, Pan = -0.3f });   // short effect: loaded and played
+using var music = mixer.PlayStream("music.ogg", loop: true);           // long sound: decoded ahead on a background thread
+
+// On the audio device thread (no allocation, no locks):   mixer.Render(deviceBuffer);
+
+Audio.Transcode("take.wav", "take.flac");                  // format from the extension: .wav, .flac, .opus
+var loudness = Audio.Measure("take.flac");                 // loudness.IntegratedLufs, .LoudnessRange, .TruePeakDbtp
+Audio.Normalize("take.wav", "take-14.wav");                // -14 LUFS, true peak at most -1 dBTP
+```
+
+`Audio` is the one-call layer; it is built on the low-level API below and returns the same types. Every default is tunable through an options record (`LoadOptions`, `PlayOptions`, `TranscodeOptions`, `NormalizeOptions`).
+
+### Low-level access
+
+```csharp
 var registry = new AudioCodecRegistry().AddWav();          // opt in to formats; nothing is found by reflection
 using var decoder = AudioDecoder.OpenFile("hit.wav", registry);
-var clip = AudioClip.FromDecoder(decoder);                 // short effect: decode once, play many times
+var clip = AudioClip.FromDecoder(decoder);
 
 var mixer = new AudioMixer(new MixerOptions { SampleRate = 48000, Channels = 2 });
 var voice = mixer.Play(new PlayParams(clip) { Gain = 0.8f, Pan = -0.3f });
-
-// On the device thread:   mixer.Render(deviceBuffer);     // interleaved float, frames = length / channels
-// On the game thread:     mixer.Stop(voice, fadeOutFrames: 480);
+mixer.Render(deviceBuffer);                                // interleaved float, frames = length / channels
 ```
+
+### Trimming and NativeAOT
+
+The one-call layer uses `Audio.Kit`, a registry with **every** codec, so an app that calls `Audio.Load`, `mixer.Play(path)` and friends carries all of them. To keep unused codecs out of a published app, use an `AudioKit` over your own registry (same methods, same defaults) or the low-level API:
+
+```csharp
+var kit = new AudioKit(new AudioCodecRegistry().AddWav().AddOgg().AddVorbis());
+var clip = kit.Load("hit.wav");
+kit.Play(mixer, "hit.wav");
+```
+
+`Audio.Resample`, `Audio.Measure(clip)`, `Audio.Normalize(samples, ...)` and `Audio.CreateMixer` never touch the default registry, so the codecs trim away around them. NativeAOT size of the tiny app in `tests/OneAudio.AotSize` (linux-x64, .NET 10, Release, zero trim or AOT warnings; WAV in, resample to 44.1 kHz, measure, play one voice):
+
+| Variant | Size |
+|---|---|
+| `Audio.Load` (default registry, every decoder) | 1 963 464 bytes |
+| `AudioKit` over a WAV-only registry | 1 448 920 bytes |
+| low-level API with a WAV-only registry | 1 436 504 bytes |
+
+The encoders are linked only by the apps that call `Transcode` or `Normalize` to a file.
 
 The API is described in [docs/api.md](docs/api.md).
 
@@ -37,6 +75,7 @@ The API is described in [docs/api.md](docs/api.md).
 | `src/OneAudio/` | the library; `Kernels/` is the only place unsafe code may live |
 | `tests/OneAudio.Tests/` | xUnit v3 tests |
 | `tests/OneAudio.AotSmoke/` | NativeAOT console app: open WAV, decode, mix |
+| `tests/OneAudio.AotSize/` | three tiny NativeAOT apps for comparing published size (`-p:Variant=` default, kit or wav) |
 | `bench/OneAudio.Benchmarks/` | BenchmarkDotNet |
 | `fuzz/` | SharpFuzz targets |
 | `tools/` | corpus fetch script, test-data generators |

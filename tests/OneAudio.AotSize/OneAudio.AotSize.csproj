@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Publishes one of three tiny apps (-p:Variant=default|kit|wav) so NativeAOT sizes can be compared:
+       default  uses Audio.Load, which keeps every codec;
+       kit      uses an AudioKit over a WAV-only registry, plus Resample, CreateMixer and Measure;
+       wav      uses the low-level API with a WAV-only registry. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Variant Condition="'$(Variant)' == ''">default</Variant>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Variants/**" />
+    <Compile Include="Variants/$(Variant).cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/OneAudio/OneAudio.csproj" />
+  </ItemGroup>
+</Project>

@@ -5,6 +5,18 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-26
+
+### Added
+
+- A one-call layer on top of the existing API, nothing in it changes: `Audio` (and `AudioKit`, the same calls over a registry of your choosing) with
+  `Open`, `Load` (decode to an `AudioClip`, optionally converting rate and channels), `Transcode` to WAV, FLAC or Ogg Opus, `Resample`,
+  `Measure`, `Normalize` (samples, clips or file to file, default -14 LUFS with a -1 dBTP true-peak ceiling) and `CreateMixer`.
+- `mixer.Play(path)` and `mixer.PlayStream(path, loop: true)` extension methods (`AudioMixerPlayExtensions`), with `PlayOptions` and a `StreamingVoice` handle.
+- Options records `LoadOptions`, `TranscodeOptions`, `NormalizeOptions`, `PlayOptions`; results `TranscodeResult` and `NormalizeResult`; enum `AudioFileFormat`.
+- `AudioClip.Samples`: a read-only view of the decoded samples.
+- `tests/OneAudio.AotSize`: three tiny NativeAOT apps that compare published size with the default registry, a WAV-only `AudioKit` and the low-level API.
+
 ## [1.0.0] - 2026-10-25
 
 The first stable release. From here on the public API follows Semantic Versioning.
