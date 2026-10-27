@@ -477,7 +477,8 @@ public sealed partial class AudioMixer : IAudioSource
         // Reserved converters are built now, which also builds the shared filter tables outside any render or play call.
         foreach (var r in options.ResolveReservations())
             for (int i = 0; i < r.Count; i++) PoolPush(CreateConverter(r.Channels, r.Quality));
-    
+        // On an interpreting runtime (browser-wasm) the first use of each feature allocates; spend that here, not on the render thread.
+        Mixing.MixerWarmUp.RunIfNeeded();
     }
 
     /// <summary>Play requests refused because every converter allowed by <see cref="MixerOptions.MaxConvertedVoices"/> was in use. Safe to read from any thread.</summary>

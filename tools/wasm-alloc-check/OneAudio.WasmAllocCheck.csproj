@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+  <!-- Not part of the solution: a browser-wasm program (Mono runtime) that drives the mixer through a manual output device and
+       reports how many bytes the render callback allocated. tools/wasm-alloc-check/run.sh publishes it and runs it in headless Chrome. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>OneAudio.WasmAllocCheck</AssemblyName>
+    <RootNamespace>OneAudio.WasmAllocCheck</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <WasmEnableWebcil>false</WasmEnableWebcil>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <OneAudioRoot Condition="'$(OneAudioRoot)' == ''">$(MSBuildThisFileDirectory)../../</OneAudioRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(OneAudioRoot)src/OneAudio/OneAudio.csproj" />
+    <ProjectReference Include="$(OneAudioRoot)src/OneAudio.Devices/OneAudio.Devices.csproj" />
+  </ItemGroup>
+</Project>

@@ -74,6 +74,18 @@ jobs:
         shell: bash
         run: ./smoke-out/OneAudio.AotSmoke
 
+  wasm-alloc:
+    name: render allocations on browser-wasm (Mono)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Publish the check app, run it in headless Chrome and require zero bytes
+        run: tools/wasm-alloc-check/run.sh
+
   pack:
     name: package
     runs-on: ubuntu-latest

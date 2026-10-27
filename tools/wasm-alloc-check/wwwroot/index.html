@@ -1,0 +1,12 @@
+<!doctype html><html><body><pre id="out">pending</pre><script type="module">
+import { dotnet } from './_framework/dotnet.js';
+let text;
+try {
+  const rt = await dotnet.create();
+  const ex = await rt.getAssemblyExports(rt.getConfig().mainAssemblyName);
+  text = ex.OneAudio.WasmAllocCheck.Check.Run();
+} catch (e) {
+  text = 'ERROR ' + e + ' ' + (e && e.stack ? e.stack : '');
+}
+await fetch('/result', { method: 'POST', body: text });
+</script></body></html>

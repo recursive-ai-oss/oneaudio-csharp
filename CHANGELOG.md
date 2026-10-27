@@ -15,6 +15,10 @@ Adds an Android backend to `RecursiveAI.OneAudio.Devices`; the core package chan
 - AAudio cannot enumerate devices: `List` returns one entry, `default`; a specific device is opened by its decimal Android audio device id. The device must give the rate and channel count asked for, otherwise the open fails with a reason. Exclusive mode is refused.
 - `tools/android-smoke`: a NativeAOT console program and `run.sh` that build for `linux-bionic-arm64` or `-x64`, push over adb and play a -34 dBFS tone, printing the device counters.
 
+### Fixed
+
+- On the Mono runtime for browser-wasm, `AudioMixer`'s render callback allocated a few hundred bytes the first time each feature ran (the first voice, a resampled voice, a filter, ducking, a bus meter, the end of a voice), so `DeviceCounters.RenderAllocatedBytes` read above zero in the browser. The cause is the interpreter's first execution of a method, which creates runtime type and generic-instantiation objects on the managed heap; compiled runtimes (CoreCLR, NativeAOT) do not. The mixer now runs a short throwaway session through every render-path feature when it is first created on an interpreting runtime (about a quarter of a second once per process in Chrome; nothing on CoreCLR or NativeAOT), and the counter reads 0 from the first callback. `tools/wasm-alloc-check` publishes a browser-wasm program and runs the mixer through voices, loops, crossfades, stops, buses, filters, reverb, ducking, meters and the limiter in headless Chrome, failing on any allocated byte; the `ci` workflow runs it.
+
 ### Checked
 
 - On an Android 14 x86_64 emulator (no real sound output; the emulator's audio was disabled): five seconds of tone through the NativeAOT smoke, with `FramesPlayed` advancing 48,005 frames per second from the device clock, `PeakPlayed` 0.0200, `Underruns` 0, `DeviceUnderruns` 0, `RenderAllocatedBytes` 0, suspend holds the position and resume continues, and capture opened and delivered frames.
