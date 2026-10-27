@@ -183,15 +183,26 @@ public class RealtimeTests
         var sw = Stopwatch.StartNew();
         output.Start();
         Thread.Sleep(1000);
-        var c = output.Counters;
-        double seconds = sw.Elapsed.TotalSeconds;
         Assert.Equal(DeviceState.NoDevice, output.State);
+
+        // Suspend takes the supervisor's lock, so pacing has stopped and every counter below is read at rest; the wall clock is read after
+        // it, so it can only be later than the last paced frame.
+        output.Suspend();
+        double seconds = sw.Elapsed.TotalSeconds;
+        var c = output.Counters;
         Assert.Equal(0, c.FramesWritten);
-        Assert.InRange(c.SilentFrames, (long)(Rate * (seconds - 0.25)), (long)(Rate * (seconds + 0.05)));
         Assert.Equal(c.SilentFrames, c.FramesRendered);
         Assert.Equal(c.SilentFrames, tone.Rendered);
 
+        // The pacer renders what the wall clock says is due, so it can never be ahead of it (one chunk of slack for rounding). That bound
+        // holds on any machine and fails a pacer that runs unpaced. The lower bound is deliberately loose: when the supervisor thread is
+        // starved it skips ahead after 100 ms rather than render a burst, so a loaded runner may fall well short of real time, but a pacer
+        // that is stuck or runs at a fraction of real time renders far less than a fifth.
+        Assert.True(c.SilentFrames <= (long)(Rate * seconds) + 480, $"ran ahead of the clock: {c.SilentFrames} frames in {seconds:F3} s");
+        Assert.True(c.SilentFrames >= (long)(Rate * seconds * 0.2), $"far behind the clock: {c.SilentFrames} frames in {seconds:F3} s");
+
         backend.FailOpens = 0;
+        output.Resume();
         Assert.True(Wait.Until(() => output.State == DeviceState.Running, 3000), "the device was never restored: " + output.LastError);
         Assert.True(Wait.Until(() => output.Counters.FramesPlayed > 2000));
     }

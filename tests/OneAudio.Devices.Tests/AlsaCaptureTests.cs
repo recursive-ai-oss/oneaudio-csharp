@@ -106,13 +106,27 @@ public class AlsaCaptureTests
     }
 
     [Fact]
-    public void ThePlatformBackend_ListsInputs_AndOneCallCaptureWorks()
+    public void ThePlatformBackend_ListsWellFormedInputs_AndOneCallCaptureWorks()
     {
         RequireAlsa();
-        Assert.NotEmpty(AudioDevices.List(DeviceDirection.Input));
+        // A host without a sound card may list no inputs at all; what it lists must be well formed.
+        Assert.All(AudioDevices.List(DeviceDirection.Input), d => Assert.Equal(DeviceDirection.Input, d.Direction));
         using var input = Audio.CreateInput(new DeviceStreamOptions { DeviceId = "null", CaptureBufferMilliseconds = 100 });
         Assert.True(Wait.Until(() => input.Counters.FramesWritten > 2000), input.Counters.ToString());
         Assert.Equal("alsa", input.BackendName);
+    }
+
+    [Fact]
+    public void TheDefaultInput_OpensOrDeliversNothing_AndNothingThrows()
+    {
+        RequireAlsa();
+        using var input = Audio.CreateInput((ReadOnlySpan<float> block, in RenderContext context) => { });
+        if (input.State != DeviceState.Running)
+        {
+            Assert.Equal(DeviceState.NoDevice, input.State);
+            Assert.False(string.IsNullOrEmpty(input.LastError));
+            Assert.Equal(0, input.Counters.FramesWritten);
+        }
     }
 
     [Fact]
