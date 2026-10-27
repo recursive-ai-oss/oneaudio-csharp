@@ -328,7 +328,7 @@ public sealed class HappyPathTests : IDisposable
         var r2 = Audio.Normalize(wav, P("n.flac"), new NormalizeOptions { TargetLufs = -20, Output = new TranscodeOptions { SampleRate = 48000 } });
         var m = Audio.Measure(P("n.flac"));
         Assert.InRange(m.IntegratedLufs, -20.1, -19.9);
-        Assert.Equal(48000, Audio.Open(P("n.flac")).Format.SampleRate);
+        using (var check = Audio.Open(P("n.flac"))) Assert.Equal(48000, check.Format.SampleRate);
         Assert.Equal(-20 - r2.Before.IntegratedLufs, r2.GainDb, 1e-9);
 
         using var input = File.OpenRead(wav);
