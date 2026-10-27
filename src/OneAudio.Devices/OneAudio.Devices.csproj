@@ -32,5 +32,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="OneAudio.Devices.Tests" />
+    <InternalsVisibleTo Include="OneAudio.IosSmoke" />
   </ItemGroup>
 </Project>

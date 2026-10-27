@@ -50,6 +50,26 @@ internal static class DeviceSmoke
             if (real.State != DeviceState.Running || real.Counters.FramesPlayed < 4800) return Fail("alsa null " + real.Counters + " " + real.LastError);
         }
 
+        // Core Audio on an Apple system: list the devices and, where there is a default output, run it for a moment, very quietly.
+        if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+        {
+            var apple = new CoreAudioBackend();
+            if (!apple.IsAvailable) return Fail("coreaudio unavailable");
+            if (apple.GetDefault(DeviceDirection.Output) is not null)
+            {
+                if (apple.List(DeviceDirection.Output).Count == 0) return Fail("coreaudio lists no outputs");
+                var quiet = new AudioMixer(new MixerOptions { SampleRate = rate, Channels = 2 });
+                var hum = new float[rate];
+                for (int i = 0; i < hum.Length; i++) hum[i] = 0.003f * MathF.Sin(2 * MathF.PI * 440 * i / rate);
+                quiet.Play(new PlayParams(new AudioClip(new AudioFormat(rate, 1), hum)) { Loop = true });
+                using var real = AudioOutputDevice.Open(quiet, new DeviceStreamOptions { MeasureRenderAllocations = true }, apple);
+                real.Start();
+                for (int i = 0; i < 400 && real.Counters.FramesPlayed < 4800; i++) Thread.Sleep(5);
+                var rc = real.Counters;
+                if (real.State == DeviceState.Running && (rc.FramesPlayed < 4800 || rc.RenderAllocatedBytes != 0 || rc.CallbackFaults != 0)) return Fail("coreaudio " + rc);
+                Console.WriteLine("coreaudio: " + real.State + " " + rc);
+            }
+        }
         if (WasapiSmoke.Run() is var wasapi and not 0) return wasapi;
 
         _ = AudioDevices.IsAvailable;

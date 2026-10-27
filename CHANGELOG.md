@@ -15,6 +15,7 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
   layer is `Audio.Play(mixer)`, `Audio.CreateOutput` and `Audio.CreateInput`, as C# 14 extension members on `Audio`.
 - `AlsaBackend` (Linux playback through ALSA, including PipeWire and PulseAudio through their ALSA plug-ins): enumeration, period and buffer negotiation, float or 16-bit,
   underrun recovery, device position from `snd_pcm_delay`, and capture (`Audio.CreateInput`, callback or `Read`).
+- `CoreAudioBackend` (macOS and iOS): device enumeration with default and hot-plug notifications, playback and capture through audio units with rate and channel conversion, a device-clock `FramesPlayed`, follow-the-default and device-loss handling, microphone-permission refusal with a reason, and on iOS the audio-session category, interruptions and route changes. `tools/ios-smoke` runs it in the iOS simulator.
 - `WasapiBackend` (Windows playback and capture through WASAPI): MMDevice enumeration, shared mode with automatic rate and channel conversion, exclusive mode with format negotiation and a stated refusal, device position from `IAudioClock`, endpoint notifications for default and hot-plug changes, lost-device handling, and the "Pro Audio" scheduler class on the device thread. All COM calls are v-table function pointers, so it is trim and NativeAOT clean. Verified so far by unit tests over hand-built COM objects and by CI on Windows; not yet on real hardware.
 
 ## [1.1.0] - 2026-10-26

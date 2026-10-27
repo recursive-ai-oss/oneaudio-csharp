@@ -703,7 +703,8 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
     private bool TryOpenLocked(string? id)
     {
         string? from = _lastId;
-        var options = id == _options.DeviceId ? _options : _options with { DeviceId = id };
+        // The stream runs at the source's format (or the callback's), which the options only carry when no source brought its own.
+        var options = _options with { DeviceId = id, SampleRate = _format.SampleRate, Channels = _format.Channels };
         IOpenDevice? stream = null;
         string reason;
         bool ok = _backend.TryOpen(_direction, options, this, out stream, out reason) && stream is not null;
