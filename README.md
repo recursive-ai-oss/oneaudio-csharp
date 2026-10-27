@@ -72,8 +72,10 @@ The API is described in [docs/api.md](docs/api.md).
 
 | Path | Contents |
 |---|---|
-| `src/OneAudio/` | the library; `Kernels/` is the only place unsafe code may live |
+| `src/OneAudio/` | the library; `Kernels/` is the only place unsafe code may live in it |
+| `src/OneAudio.Devices/` | audio devices (playback and capture, `RecursiveAI.OneAudio.Devices`); `Interop/` is the only place unsafe code may live in it |
 | `tests/OneAudio.Tests/` | xUnit v3 tests |
+| `tests/OneAudio.Devices.Tests/` | xUnit v3 tests for the device layer |
 | `tests/OneAudio.AotSmoke/` | NativeAOT console app: open WAV, decode, mix |
 | `tests/OneAudio.AotSize/` | three tiny NativeAOT apps for comparing published size (`-p:Variant=` default, kit or wav) |
 | `bench/OneAudio.Benchmarks/` | BenchmarkDotNet |

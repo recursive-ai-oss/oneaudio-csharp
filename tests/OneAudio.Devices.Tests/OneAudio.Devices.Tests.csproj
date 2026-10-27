@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CA1707;CA1861;xUnit1051;xUnit1031</NoWarn>
+    <!-- The allocation tests read GC.GetAllocatedBytesForCurrentThread around calls; a concurrent GC would shift that counter. -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="4.0.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/OneAudio.Devices/OneAudio.Devices.csproj" />
+  </ItemGroup>
+</Project>

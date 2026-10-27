@@ -18,5 +18,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/OneAudio/OneAudio.csproj" />
+    <ProjectReference Include="../../src/OneAudio.Devices/OneAudio.Devices.csproj" />
   </ItemGroup>
 </Project>

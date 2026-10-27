@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>$(OneAudioPackageId).Devices</PackageId>
+    <RootNamespace>OneAudio.Devices</RootNamespace>
+    <!-- Versioned in lockstep with the core package; the release workflow checks the tag against both. -->
+    <Version Condition="'$(Version)' == ''">1.2.0</Version>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <Description>Audio device playback and capture for OneAudio: WASAPI, Core Audio and ALSA over the operating system's own libraries, with no dependencies beyond the base class library.</Description>
+    <!-- The operating-system calls (COM v-tables, the Objective-C runtime, callback function pointers) need unsafe code.
+         It is allowed in Interop/ only; the rest of the assembly is safe code, and tools/check-repo.sh (run by CI) fails
+         if unsafe constructs appear anywhere else. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/recursive-ai-oss/oneaudio-csharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/recursive-ai-oss/oneaudio-csharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PackageTags>audio;playback;capture;wasapi;coreaudio;alsa;mixer;nativeaot</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="PACKAGE.md" Pack="true" PackagePath="/" />
+    <None Include="../OneAudio/icon.png" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE-MIT" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE-APACHE" Pack="true" PackagePath="/" />
+    <None Include="../../CHANGELOG.md" Pack="true" PackagePath="/" Condition="Exists('$(MSBuildThisFileDirectory)../../CHANGELOG.md')" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../OneAudio/OneAudio.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="OneAudio.Devices.Tests" />
+  </ItemGroup>
+</Project>
