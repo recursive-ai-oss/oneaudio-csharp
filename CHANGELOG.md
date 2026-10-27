@@ -5,6 +5,22 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-27
+
+Adds an Android backend to `RecursiveAI.OneAudio.Devices`; the core package changes only its version number. The API changes are additive.
+
+### Added
+
+- `AAudioBackend` (`DeviceBackendKind.AAudio`): playback and capture through AAudio (`libaaudio.so`, Android 8.0 / API 26 or later) over P/Invoke. Shared, low-latency, 32-bit float streams driven by AAudio's data callback, so the engine renders straight into the device buffer. `FramesPlayed` comes from the device's timestamp (clamped to the frames it has read), `QueuedFrames` from frames written minus read, and the device's xrun count feeds `DeviceCounters.DeviceUnderruns`. A disconnected stream is reported as a lost device and the engine reopens it. It is chosen automatically in an Android process, including a NativeAOT program built for `linux-bionic`, which runs on the Linux runtime.
+- AAudio cannot enumerate devices: `List` returns one entry, `default`; a specific device is opened by its decimal Android audio device id. The device must give the rate and channel count asked for, otherwise the open fails with a reason. Exclusive mode is refused.
+- `tools/android-smoke`: a NativeAOT console program and `run.sh` that build for `linux-bionic-arm64` or `-x64`, push over adb and play a -34 dBFS tone, printing the device counters.
+
+### Checked
+
+- On an Android 14 x86_64 emulator (no real sound output; the emulator's audio was disabled): five seconds of tone through the NativeAOT smoke, with `FramesPlayed` advancing 48,005 frames per second from the device clock, `PeakPlayed` 0.0200, `Underruns` 0, `DeviceUnderruns` 0, `RenderAllocatedBytes` 0, suspend holds the position and resume continues, and capture opened and delivered frames.
+- **Not yet checked on real hardware.** No physical Android device has run this backend: nothing is known about real-device latency, the low-latency MMAP path (the emulator uses the legacy path), Bluetooth or headphone route changes, or the microphone permission flow. The disconnect-and-reopen path is covered by a unit test of the stream's error handling and by the engine's existing reopen tests, but no real stream has been disconnected.
+- The build produces no trim or AOT warnings for `linux-bionic-x64` and `linux-bionic-arm64`; the arm64 build was linked but not run.
+
 ## [1.2.1] - 2026-10-27
 
 A patch release for `RecursiveAI.OneAudio.Devices`; the core package changes only its version number. The API changes are additive.

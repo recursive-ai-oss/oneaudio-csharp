@@ -1,6 +1,6 @@
 # RecursiveAI.OneAudio.Devices
 
-Audio device playback and capture for [RecursiveAI.OneAudio](https://www.nuget.org/packages/RecursiveAI.OneAudio): WASAPI on Windows, Core Audio on macOS and iOS, ALSA on Linux, over the operating system's own libraries, with no dependencies beyond the .NET base class library.
+Audio device playback and capture for [RecursiveAI.OneAudio](https://www.nuget.org/packages/RecursiveAI.OneAudio): WASAPI on Windows, Core Audio on macOS and iOS, ALSA on Linux, AAudio on Android, over the operating system's own libraries, with no dependencies beyond the .NET base class library.
 
 ```csharp
 using OneAudio;
