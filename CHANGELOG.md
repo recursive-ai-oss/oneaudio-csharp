@@ -5,6 +5,10 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+### Checked
+
+- WASAPI playback on real hardware: a Windows 11 laptop (build 26200) with Realtek High Definition Audio speakers, as the default output in shared mode (32-bit float, 480-frame period, 1056-frame buffer, 22 ms reported latency), both from a service session and from the logged-in desktop session. Over five seconds of a -34 dBFS tone `FramesPlayed` advanced about 48,000 frames per second from the device clock, `PeakPlayed` was 0.0200, `Underruns`, `DeviceUnderruns`, `CallbackFaults` and `RenderAllocatedBytes` were 0, the longest render took under 1 ms, suspend held the position and resume continued, and an unknown device id was refused with a reason. Not yet checked on real hardware: WASAPI exclusive mode, capture from a real microphone, and default-device and hot-plug changes.
+
 ## [1.3.0] - 2026-10-27
 
 Adds an Android backend to `RecursiveAI.OneAudio.Devices`; the core package changes only its version number. The API changes are additive.
