@@ -97,7 +97,7 @@ internal static class PlatformBackends
 
     private static AlsaBackend CreateLinux() => new();
 
-    private static IAudioDeviceBackend? CreateApple() => null;
+    private static CoreAudioBackend CreateApple() => new();
 
     private static IAudioDeviceBackend? CreateWindows() => null;
 }

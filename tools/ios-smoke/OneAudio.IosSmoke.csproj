@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Not part of the solution: it needs the iOS workload and Xcode. tools/ios-smoke/run.sh copies it to a scratch folder
+       (the iOS SDK does not cope with the repository's shared artifacts layout) and builds and runs it there. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-ios</TargetFramework>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">iossimulator-arm64</RuntimeIdentifier>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>OneAudio.IosSmoke</AssemblyName>
+    <RootNamespace>OneAudio.IosSmoke</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
+    <ApplicationId>org.recursiveai.oneaudio.smoke</ApplicationId>
+    <ValidateXcodeVersion>false</ValidateXcodeVersion>
+    <PublishAot Condition="'$(AotApp)' == 'true'">true</PublishAot>
+    <OneAudioRoot Condition="'$(OneAudioRoot)' == ''">$(MSBuildThisFileDirectory)../../</OneAudioRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(OneAudioRoot)src/OneAudio/OneAudio.csproj" />
+    <ProjectReference Include="$(OneAudioRoot)src/OneAudio.Devices/OneAudio.Devices.csproj" />
+  </ItemGroup>
+</Project>

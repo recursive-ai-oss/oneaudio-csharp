@@ -12,3 +12,9 @@ Console.WriteLine(output.Counters);                    // frames written and pla
 ```
 
 See the repository's `docs/api.md` for the full device API.
+
+## Apple notes
+
+- macOS: playback and capture on any Core Audio device, rate and channel conversion handled for you, and the stream follows default-device changes and removal. The system picks the hardware buffer size unless you set `PeriodFrames` or `BufferFrames`.
+- Microphone: if the user denied access, opening an input fails with a message saying so. A command-line program without an app bundle and a microphone usage description may be unable to ask and receive silence.
+- iOS: set `DeviceStreamOptions.AppleSession` to choose the audio-session category (`Ambient` by default). Interruptions pause the stream and resume it afterwards; the app needs a microphone usage description in its Info.plist to record. NativeAOT output exists for devices (`ios-arm64`); the simulator runs the Mono build.
