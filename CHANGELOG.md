@@ -22,8 +22,9 @@ Adds an Android backend to `RecursiveAI.OneAudio.Devices`; the core package chan
 ### Checked
 
 - On an Android 14 x86_64 emulator (no real sound output; the emulator's audio was disabled): five seconds of tone through the NativeAOT smoke, with `FramesPlayed` advancing 48,005 frames per second from the device clock, `PeakPlayed` 0.0200, `Underruns` 0, `DeviceUnderruns` 0, `RenderAllocatedBytes` 0, suspend holds the position and resume continues, and capture opened and delivered frames.
-- **Not yet checked on real hardware.** No physical Android device has run this backend: nothing is known about real-device latency, the low-latency MMAP path (the emulator uses the legacy path), Bluetooth or headphone route changes, or the microphone permission flow. The disconnect-and-reopen path is covered by a unit test of the stream's error handling and by the engine's existing reopen tests, but no real stream has been disconnected.
-- The build produces no trim or AOT warnings for `linux-bionic-x64` and `linux-bionic-arm64`; the arm64 build was linked but not run.
+- On a Pixel 8 Pro (Android 17, arm64), playback through the speaker with the NativeAOT `linux-bionic-arm64` smoke: the stream opened on AAudio's low-latency MMAP path with a 96-frame period and a 960-frame buffer (22 ms reported latency); over five seconds `FramesPlayed` advanced about 48,000 frames per second from the device clock, `PeakPlayed` was 0.0200, `Underruns`, `DeviceUnderruns` and `RenderAllocatedBytes` were 0, the longest render took 0.26 ms, and suspend held the position and resume continued.
+- **Not yet checked on real hardware:** capture from a real microphone (and its permission flow), Bluetooth or headphone route changes, and a real disconnect. The disconnect-and-reopen path is covered by a unit test of the stream's error handling and by the engine's existing reopen tests. An unknown device id opened the default device on both the emulator and the phone, rather than failing.
+- The build produces no trim or AOT warnings for `linux-bionic-x64` and `linux-bionic-arm64`.
 
 ## [1.2.1] - 2026-10-27
 
