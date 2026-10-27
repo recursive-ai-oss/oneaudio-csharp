@@ -36,6 +36,9 @@ public sealed class AudioClip : AudioSource
         _samples = samples;
     }
 
+    /// <summary>The interleaved samples (frames x channels). Read-only view of the clip's storage; no copy is made.</summary>
+    public ReadOnlyMemory<float> Samples => _samples;
+
     /// <summary>Length in frames.</summary>
     public long Frames => _samples.Length / Format.Channels;
 

@@ -14,7 +14,28 @@ Audio decode, encode, resample, mix and analyse for .NET 10, written from the pu
 
 Every decoder streams (`Read` into a span you provide, nothing allocated per call) and seeks to the exact frame. Malformed input raises a typed `OneAudioException`; sizes read from a file are checked against `AudioLimits` before anything is allocated.
 
-## Decode
+## Quick look
+
+```csharp
+using OneAudio;
+
+var clip = Audio.Load("hit.wav");                          // any supported format, decoded to float (WAV, Ogg, Vorbis, Opus, FLAC, MP3)
+var mixer = Audio.CreateMixer();                           // 48 kHz stereo, 64 voices, limiter on the master
+mixer.Play("hit.wav", new PlayOptions { Gain = 0.8f, Pan = -0.3f });   // short effect: loaded and played
+using var music = mixer.PlayStream("music.ogg", loop: true);           // long sound: decoded ahead on a background thread
+
+// On the audio device thread (no allocation, no locks):   mixer.Render(deviceBuffer);
+
+Audio.Transcode("take.wav", "take.flac");                  // format from the extension: .wav, .flac, .opus
+var loudness = Audio.Measure("take.flac");                 // loudness.IntegratedLufs, .LoudnessRange, .TruePeakDbtp
+Audio.Normalize("take.wav", "take-14.wav");                // -14 LUFS, true peak at most -1 dBTP
+```
+
+Everything above is built on the low-level API, which stays available for full control (see below). The one-call layer registers every codec; a trimmed application that wants fewer builds an `AudioKit` over its own `AudioCodecRegistry` (`new AudioKit(new AudioCodecRegistry().AddWav())`) and calls the same methods on it.
+
+## Low-level access
+
+### Decode
 
 ```csharp
 using OneAudio;
@@ -31,7 +52,7 @@ while ((frames = decoder.Read(buffer)) > 0)
 decoder.Seek(decoder.Format.SampleRate * 30);                       // frame 30 s in
 ```
 
-## Mix
+### Mix
 
 ```csharp
 var clip = AudioClip.FromDecoder(AudioDecoder.OpenFile("hit.wav", registry));   // short effect: decode once, play many times
@@ -47,7 +68,7 @@ mixer.Stop(voice, fadeOutFrames: 480);
 
 Voices, buses with sub-mixes, ducking, gain, pan, pitch, loops, crossfades, sample-accurate start, a voice cap with priorities, low-pass/high-pass filters, a reverb and a limiter, and streaming sources for music are included. Control calls reach the render thread through a preallocated lock-free queue.
 
-## Encode
+### Encode
 
 ```csharp
 using var input = AudioDecoder.OpenFile("take.wav", registry);
@@ -57,7 +78,7 @@ FlacEncoder.Encode(input, output, new FlacEncoderSettings { CompressionLevel = 5
 
 `WavEncoder` works the same way. `OpusFileWriter` writes an Ogg Opus file from float PCM and resamples input that is not 48 kHz.
 
-## Loudness
+### Loudness
 
 ```csharp
 using var decoder = AudioDecoder.OpenFile("mix.flac", registry);
