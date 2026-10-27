@@ -121,17 +121,55 @@ public class AlsaTests
     }
 
     [Fact]
-    public void Enumeration_ListsTheDefaultDevice_AndFollowsAlsaNames()
+    public void Enumeration_ReturnsOnlyWellFormedEntries_OnAnyHost()
     {
         RequireAlsa();
         var backend = new AlsaBackend();
-        var list = backend.List(DeviceDirection.Output);
-        Assert.Contains(list, d => d.Id == "default" && d.IsDefault && d.Direction == DeviceDirection.Output);
-        Assert.DoesNotContain(list, d => d.Id == "null");
-        Assert.Equal("default", backend.GetDefault(DeviceDirection.Output)?.Id);
-        Assert.NotEmpty(backend.List(DeviceDirection.Input));
-        Assert.Equal(DeviceBackendKind.Alsa, list[0].Backend);
         Assert.True(backend.IsAvailable);
+        Assert.Equal("default", backend.GetDefault(DeviceDirection.Output)?.Id);
+        foreach (var direction in new[] { DeviceDirection.Output, DeviceDirection.Input })
+        {
+            // A host without a sound card may list nothing or only plug-in names; it must never throw or list the null device.
+            var list = backend.List(direction);
+            Assert.DoesNotContain(list, d => d.Id == "null");
+            Assert.All(list, d =>
+            {
+                Assert.False(string.IsNullOrEmpty(d.Id));
+                Assert.Equal(direction, d.Direction);
+                Assert.Equal(DeviceBackendKind.Alsa, d.Backend);
+            });
+        }
+    }
+
+    [Fact]
+    public void Enumeration_ListsTheDefaultDevice_WhenTheHostHasOne()
+    {
+        RequireAlsa();
+        var list = new AlsaBackend().List(DeviceDirection.Output);
+        Assert.SkipUnless(list.Any(d => d.Id == "default"), "this host's ALSA configuration has no default output (no sound card or sound server)");
+        Assert.Contains(list, d => d.Id == "default" && d.IsDefault);
+    }
+
+    [Fact]
+    public void TheDefaultDevice_OpensOrFallsBackToSilence_AndNothingThrows()
+    {
+        RequireAlsa();
+        // Silent source: harmless on a host that does have a sound card.
+        using var output = Audio.CreateOutput((Span<float> block, in RenderContext context) => block.Clear());
+        if (output.State == DeviceState.Running)
+        {
+            Assert.NotNull(output.Device);
+            Assert.Null(output.LastError);
+        }
+        else
+        {
+            // The documented behaviour without a device: no sound, a reason, and the program's clock keeps running.
+            Assert.Equal(DeviceState.NoDevice, output.State);
+            Assert.False(string.IsNullOrEmpty(output.LastError));
+            Assert.Null(output.Device);
+            Assert.True(Wait.Until(() => output.Counters.SilentFrames > 0), output.Counters.ToString());
+            Assert.Equal(0, output.Counters.FramesWritten);
+        }
     }
 
     [Fact]
