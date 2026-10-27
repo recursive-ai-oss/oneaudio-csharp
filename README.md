@@ -51,7 +51,7 @@ mixer.Render(deviceBuffer);                                // interleaved float,
 The one-call layer uses `Audio.Kit`, a registry with **every** codec, so an app that calls `Audio.Load`, `mixer.Play(path)` and friends carries all of them. To keep unused codecs out of a published app, use an `AudioKit` over your own registry (same methods, same defaults) or the low-level API:
 
 ```csharp
-var kit = new AudioKit(new AudioCodecRegistry().AddWav().AddVorbis());
+var kit = new AudioKit(new AudioCodecRegistry().AddWav().AddOgg().AddVorbis());
 var clip = kit.Load("hit.wav");
 kit.Play(mixer, "hit.wav");
 ```
