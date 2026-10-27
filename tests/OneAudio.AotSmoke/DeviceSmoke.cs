@@ -40,7 +40,17 @@ internal static class DeviceSmoke
             AudioDevices.UseBackend(null);
         }
 
-        _ = AudioDevices.IsAvailable; // loads the platform backend, if any, without opening a device
+        // The operating system's own backend, on a PCM that needs no hardware where one exists (ALSA's null device).
+        var alsa = new AlsaBackend();
+        if (alsa.IsAvailable)
+        {
+            using var real = AudioOutputDevice.Open(mixer, new DeviceStreamOptions { DeviceId = "null" }, alsa);
+            real.Start();
+            for (int i = 0; i < 500 && real.Counters.FramesPlayed < 4800; i++) Thread.Sleep(5);
+            if (real.State != DeviceState.Running || real.Counters.FramesPlayed < 4800) return Fail("alsa null " + real.Counters + " " + real.LastError);
+        }
+
+        _ = AudioDevices.IsAvailable;
         return 0;
     }
 

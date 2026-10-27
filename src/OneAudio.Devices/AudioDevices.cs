@@ -95,7 +95,7 @@ internal static class PlatformBackends
         return null;
     }
 
-    private static IAudioDeviceBackend? CreateLinux() => null;
+    private static AlsaBackend CreateLinux() => new();
 
     private static IAudioDeviceBackend? CreateApple() => null;
 
