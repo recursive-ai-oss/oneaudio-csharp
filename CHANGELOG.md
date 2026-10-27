@@ -14,7 +14,7 @@ What has been checked on real hardware is unchanged from 1.2.0 (see below); the 
 ### Fixed
 
 - A stream whose backend cannot name its device (`IOpenDevice.Device` is `null`, as in a browser audio context) was taken for a change of the default device on every poll, so the stream was reopened about once a second and counted as a default switch. `null` now means "unknown": the package compares the stream's device with the default only when both are known. A backend that sees the default change itself still says so with `NotifyDefaultChanged`, and that is honoured. The meaning of `null` is documented on `IOpenDevice.Device`.
-- `DeviceCounters.RenderAllocatedBytes` could read a few hundred bytes on a host that steps a manual device in short blocks, because the program's own source did first-use work after the eight callbacks the probe skipped. The package's render path itself allocates nothing from the first callback (now tested with 480-frame blocks, with and without rate conversion). The skipped count is now an option, below.
+- `DeviceCounters.RenderAllocatedBytes` could read a few hundred bytes on a host that steps a manual device in short blocks. We could not reproduce it: the package's render path allocates nothing after warm-up (now tested with 480-frame blocks, with and without rate conversion), so the bytes most likely come from first-use work in the program's own source or the runtime after the eight callbacks the probe skips. The skipped count is now an option, below.
 
 ### Added
 
