@@ -66,6 +66,13 @@ public sealed class ManualBackend : IAudioDeviceBackend
     /// </summary>
     public int LagFrames { get; set; }
 
+    /// <summary>
+    /// The sample rate the simulated devices run at; 0 (the default) means the rate each stream asks for. A different rate lets tests and hosts
+    /// act out a device (a browser's audio context, say) that does not honour the request; the output device then converts if
+    /// <see cref="DeviceStreamOptions.AllowRateConversion"/> allows. Set before opening.
+    /// </summary>
+    public int DeviceSampleRate { get; set; }
+
     /// <summary>The period each stream asks for, in frames. Default 256. Set before opening.</summary>
     public int PeriodFrames { get; set; } = 256;
 
@@ -198,6 +205,23 @@ public sealed class ManualBackend : IAudioDeviceBackend
         }
     }
 
+    /// <summary>
+    /// Receives every block of output the simulated devices consume, on the thread that calls <see cref="AudioOutputDevice.Advance"/>, with no
+    /// capacity limit: stream it to a file, a meter, a browser. The span is valid only during the call; it follows the render path's
+    /// rules (no allocation or locks) if the allocation counters matter. Independent of the recording.
+    /// </summary>
+    public Action<ReadOnlySpan<float>>? Sink { get; set; }
+
+    /// <summary>Acts out the device counting underruns of its own: every open stream reports a cumulative count that grows by <paramref name="count"/>.</summary>
+    /// <param name="count">How many underruns to add.</param>
+    public void SimulateDeviceUnderruns(int count)
+    {
+        foreach (var s in Snapshot())
+        {
+            s.AddDeviceUnderruns(count);
+        }
+    }
+
     /// <summary>Frames recorded so far (up to the capacity given at construction).</summary>
     public long RecordedFrames => Math.Min(Volatile.Read(ref _recorded), _recording is null ? 0 : _recording.Length / _recordingChannels);
 
@@ -254,7 +278,7 @@ public sealed class ManualBackend : IAudioDeviceBackend
 
         int period = options.PeriodFrames > 0 ? options.PeriodFrames : PeriodFrames;
         int buffer = options.BufferFrames > 0 ? options.BufferFrames : Math.Max(period * 4, options.LatencyMilliseconds * options.SampleRate / 1000);
-        var s = new ManualStream(this, direction, engine, new AudioDeviceFormat(options.SampleRate, options.Channels), device.Value, period, buffer);
+        var s = new ManualStream(this, direction, engine, new AudioDeviceFormat(DeviceSampleRate > 0 ? DeviceSampleRate : options.SampleRate, options.Channels), device.Value, period, buffer);
         lock (_gate)
         {
             _streams.Add(s);
@@ -329,7 +353,7 @@ public sealed class ManualBackend : IAudioDeviceBackend
         new("manual-in-0", "Manual input 0", DeviceDirection.Input, true, 48_000, 2, 64, DeviceBackendKind.Manual),
     ];
 
-    private sealed class ManualStream : IOpenDevice, IManualStream
+    private sealed class ManualStream : IOpenDevice, IManualDevice
     {
         private readonly ManualBackend _owner;
         private readonly int _channels;
@@ -399,6 +423,10 @@ public sealed class ManualBackend : IAudioDeviceBackend
             _owner.Forget(this);
         }
 
+        private long _deviceUnderruns;
+
+        public void AddDeviceUnderruns(int count) => Engine.NotifyDeviceUnderruns(Interlocked.Add(ref _deviceUnderruns, count));
+
         public void Lose()
         {
             Volatile.Write(ref _lost, 1);
@@ -425,6 +453,7 @@ public sealed class ManualBackend : IAudioDeviceBackend
                     {
                         Engine.Render(block);
                         _owner.Record(block);
+                        _owner.Sink?.Invoke(block);
                     }
                     else
                     {

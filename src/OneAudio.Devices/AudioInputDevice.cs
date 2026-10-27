@@ -94,6 +94,19 @@ public sealed class AudioInputDevice : IDisposable
     /// <summary>Stops the device without closing it; capturing resumes with <see cref="Resume"/>.</summary>
     public void Suspend() => _engine.Suspend();
 
+    /// <summary>True after <see cref="Suspend"/> until <see cref="Resume"/>.</summary>
+    public bool IsSuspended => _engine.IsUserSuspended;
+
+    /// <summary>True while the system has the device taken away; see <see cref="AudioOutputDevice.IsSystemSuspended"/>.</summary>
+    public bool IsSystemSuspended => _engine.IsSystemSuspended;
+
+    /// <summary>Called on the device thread for every captured block, before it is delivered, with the frames received so far; see <see cref="AudioOutputDevice.BlockHook"/>.</summary>
+    public Action<long>? BlockHook
+    {
+        get => _engine.BlockHook;
+        set => _engine.BlockHook = value;
+    }
+
     /// <summary>Starts the device again after <see cref="Suspend"/>.</summary>
     public void Resume() => _engine.Resume();
 

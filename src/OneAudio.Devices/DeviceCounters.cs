@@ -77,8 +77,10 @@ public readonly record struct DeviceEvent(DeviceEventKind Kind, string? FromId, 
 /// <param name="PeriodFrames">The negotiated period; 0 while no device is open.</param>
 /// <param name="LatencyMilliseconds">Audio queued ahead of the speaker, as last measured, in milliseconds (BufferFrames when the backend cannot measure).</param>
 /// <param name="MaxRenderMilliseconds">The longest a render or capture callback has taken, in milliseconds. Compare with the period.</param>
-/// <param name="RenderAllocatedBytes">Bytes allocated by the render callback after warm-up; 0 unless <see cref="DeviceStreamOptions.MeasureRenderAllocations"/> is on.</param>
+/// <param name="RenderAllocatedBytes">Bytes allocated by the render callback after its first few warm-up calls; should stay 0 (the probe is always on).</param>
 /// <param name="EventsDropped">Events lost because the event queue was full.</param>
+/// <param name="MutedFrames">Frames fed to the device as silence, or discarded with no device, while <see cref="AudioOutputDevice.Muted"/> was on; the source was not asked for them.</param>
+/// <param name="DeviceUnderruns">Underruns the device itself counted, for backends that count them (for example an audio API's xrun counter), across reopens. <see cref="Underruns"/> is the package's own tally of times it saw the device run dry; the two can differ, and a backend that has no counter leaves this at 0.</param>
 public readonly record struct DeviceCounters(
     long FramesRendered,
     long FramesWritten,
@@ -97,12 +99,6 @@ public readonly record struct DeviceCounters(
     double LatencyMilliseconds,
     double MaxRenderMilliseconds,
     long RenderAllocatedBytes,
-    long EventsDropped);
-
-/// <summary>What the loudness meter reads at the output (EBU R 128 / ITU-R BS.1770). Silence reads <see cref="double.NegativeInfinity"/>.</summary>
-/// <param name="MomentaryLufs">Loudness over the last 400 ms.</param>
-/// <param name="ShortTermLufs">Loudness over the last 3 s.</param>
-/// <param name="IntegratedLufs">Gated loudness since the last reset.</param>
-/// <param name="TruePeakDbtp">The highest true peak since the last reset, in dBTP.</param>
-/// <param name="Frames">Frames measured since the last reset.</param>
-public readonly record struct LoudnessReading(double MomentaryLufs, double ShortTermLufs, double IntegratedLufs, double TruePeakDbtp, long Frames);
+    long EventsDropped,
+    long MutedFrames = 0,
+    long DeviceUnderruns = 0);

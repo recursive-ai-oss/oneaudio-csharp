@@ -1,3 +1,5 @@
+using OneAudio.Loudness;
+
 namespace OneAudio.Devices;
 
 /// <summary>
@@ -59,6 +61,12 @@ public sealed class AudioOutputDevice : IDisposable
     /// <summary>The format the device runs at: the source's, or the options', always 32-bit float interleaved.</summary>
     public AudioDeviceFormat Format => _engine.Format;
 
+    /// <summary>
+    /// The format the open device really runs at; equal to <see cref="Format"/> unless the device runs at another rate and
+    /// <see cref="DeviceStreamOptions.AllowRateConversion"/> converts, and while no device is open.
+    /// </summary>
+    public AudioDeviceFormat DeviceFormat => _engine.DeviceFormat;
+
     /// <summary>Where the device is in its life.</summary>
     public DeviceState State => _engine.State;
 
@@ -78,7 +86,42 @@ public sealed class AudioOutputDevice : IDisposable
     public DeviceCounters Counters => _engine.Counters();
 
     /// <summary>The loudness at the output after the limiter; all <see cref="double.NegativeInfinity"/> unless <see cref="DeviceStreamOptions.Metering"/> is on.</summary>
-    public LoudnessReading Loudness => _engine.Loudness;
+    public LoudnessSnapshot Loudness => _engine.Loudness;
+
+    /// <summary>
+    /// True after <see cref="Suspend"/> until <see cref="Resume"/>. Read it instead of mirroring state from events. <see cref="State"/> is
+    /// <see cref="DeviceState.Suspended"/> when this or <see cref="IsSystemSuspended"/> is true.
+    /// </summary>
+    public bool IsSuspended => _engine.IsUserSuspended;
+
+    /// <summary>
+    /// True while the system has the device taken away (an interruption such as a call, or the app in the background on a phone), between the
+    /// <see cref="DeviceEventKind.Interrupted"/> and <see cref="DeviceEventKind.Resumed"/> events.
+    /// </summary>
+    public bool IsSystemSuspended => _engine.IsSystemSuspended;
+
+    /// <summary>
+    /// When true the device is fed silence without asking the source for audio, so the source's clock (a mixer's timeline, its voices) stands
+    /// still; set false and it continues where it stopped. The cut is immediate: fade with the mixer's master gain first if a click matters.
+    /// <see cref="DeviceCounters.MutedFrames"/> counts the silence; the rest of the counters keep saying what was played (<see cref="DeviceCounters.PeakPlayed"/>
+    /// stays put). Default false. Safe from any thread.
+    /// </summary>
+    public bool Muted
+    {
+        get => _engine.Muted;
+        set => _engine.Muted = value;
+    }
+
+    /// <summary>
+    /// Called on the device thread at the start of every block, before the source renders it, with the number of frames handed to the device
+    /// so far (<see cref="DeviceCounters.FramesWritten"/>, which keeps counting across reopens). It follows the same rules as the source: no
+    /// allocation, no lock, no blocking; a throw is caught and counted in <see cref="DeviceCounters.CallbackFaults"/>. Null (the default) means none.
+    /// </summary>
+    public Action<long>? BlockHook
+    {
+        get => _engine.BlockHook;
+        set => _engine.BlockHook = value;
+    }
 
     /// <summary>Clears the meter's history (integrated loudness, true peak) at the next block.</summary>
     public void ResetLoudness() => _engine.ResetLoudness();
@@ -96,6 +139,12 @@ public sealed class AudioOutputDevice : IDisposable
         remove => _engine.Event -= value;
     }
 
+    /// <summary>
+    /// Manual backends only: how many frames the device would like next (for example the free room in a device-side buffer); 0 when the backend
+    /// does not say or no device is open.
+    /// </summary>
+    public int WantedFrames => _engine.WantedFrames;
+
     /// <summary>Takes the oldest unread event, for programs that poll instead of subscribing. Hold one reader; the queue keeps 64 and counts drops.</summary>
     /// <param name="deviceEvent">The event.</param>
     /// <returns>False when there is none.</returns>
@@ -108,7 +157,12 @@ public sealed class AudioOutputDevice : IDisposable
     /// <exception cref="ObjectDisposedException">The output was disposed.</exception>
     public void Start() => _engine.Start();
 
-    /// <summary>Stops the device without closing it (an app moving to the background); nothing renders until <see cref="Resume"/>.</summary>
+    /// <summary>
+    /// Stops the device without closing it (an app moving to the background); nothing renders until <see cref="Resume"/>. The source's clock stops
+    /// (no frames are rendered, so <see cref="DeviceCounters.FramesRendered"/> and <see cref="DeviceCounters.FramesWritten"/> hold). The device's clock
+    /// stops once what was already queued has played out: <see cref="DeviceCounters.FramesPlayed"/> catches up with <see cref="DeviceCounters.FramesWritten"/> on
+    /// backends that drain (ALSA) and then holds. In manual mode <see cref="Advance"/> returns 0.
+    /// </summary>
     public void Suspend() => _engine.Suspend();
 
     /// <summary>Starts the device again after <see cref="Suspend"/>.</summary>
@@ -119,14 +173,22 @@ public sealed class AudioOutputDevice : IDisposable
     public void SelectDevice(string? deviceId) => _engine.Select(deviceId);
 
     /// <summary>
-    /// Manual backends only: runs the device for <paramref name="frames"/> frames on the calling thread, which plays the role of the device thread
-    /// (call it from one thread only). With no device open the frames are rendered and discarded. Returns the frames run, 0 while suspended.
+    /// Manual backends only (<see cref="IAudioDeviceBackend.IsManual"/>): runs the device for <paramref name="frames"/> device frames on the calling thread,
+    /// which plays the role of the device thread (call it from one thread only; no thread exists in this mode). It first does whatever supervisor
+    /// work is pending (reopen after a loss, follow a default change, raise events, retry a missing device twice a second), so a separate
+    /// <see cref="Pump"/> is not needed; in the steady state it takes no lock. With no device open the frames are rendered and discarded.
+    /// A backend that drives its stream from its own callbacks (so the stream is not an <see cref="IManualDevice"/>) runs nothing here and returns 0.
+    /// Returns the frames run, 0 while suspended.
     /// </summary>
     /// <param name="frames">How many frames to run.</param>
     /// <exception cref="InvalidOperationException">The backend is not manual.</exception>
     public int Advance(int frames) => _engine.Advance(frames);
 
-    /// <summary>Manual backends only: does the supervisor's work once (reopen after a loss, follow a default change, raise events).</summary>
+    /// <summary>
+    /// Manual backends only: does the supervisor's work now (reopen after a loss, follow a default change, raise events), without running any
+    /// frames. <see cref="Advance"/> does this by itself when something is pending; call <c>Pump</c> to see the effect of an event right away,
+    /// for example when the host is idle and not advancing.
+    /// </summary>
     /// <exception cref="InvalidOperationException">The backend is not manual.</exception>
     public void Pump() => _engine.Pump();
 

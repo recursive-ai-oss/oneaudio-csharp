@@ -1,3 +1,5 @@
+using OneAudio.Loudness;
+
 namespace OneAudio.Devices;
 
 /// <summary>Whether a device plays sound or records it.</summary>
@@ -128,16 +130,25 @@ public sealed record DeviceStreamOptions
     public bool FollowDefault { get; init; } = true;
 
     /// <summary>
+    /// For output: when the device runs at another sample rate than the source (a browser's audio context may run at 44.1 or 48 kHz whatever was
+    /// asked), convert in the package with the library's polyphase resampler instead of failing the open. Default true. The device then asks for
+    /// its own number of frames: <see cref="DeviceCounters.FramesWritten"/>, <see cref="DeviceCounters.FramesPlayed"/> and the buffer sizes count
+    /// device frames, <see cref="DeviceCounters.FramesRendered"/> counts the source's frames. The resampler adds a few milliseconds of latency
+    /// and is allocated when the device opens, so the render path still allocates nothing. Ratios between 1/4 and 16 are supported.
+    /// </summary>
+    public bool AllowRateConversion { get; init; } = true;
+
+    /// <summary>
     /// For output: how samples are kept inside -1..1 on their way to the device. Default <see cref="OutputLimiterMode.SoftKnee"/>.
     /// </summary>
     public OutputLimiterMode Limiter { get; init; } = OutputLimiterMode.SoftKnee;
 
-    /// <summary>Measure BS.1770 loudness at the output (after the limiter), readable from <see cref="AudioOutputDevice.Loudness"/>. Default false.</summary>
+    /// <summary>Measure BS.1770 loudness at the output (after the limiter), readable from <see cref="AudioOutputDevice.Loudness"/> as the core's <see cref="LoudnessSnapshot"/>. Default false.</summary>
     public bool Metering { get; init; }
 
     /// <summary>
-    /// Count the bytes the render callback allocates into <see cref="DeviceCounters.RenderAllocatedBytes"/> (skipping the first few
-    /// callbacks, which still warm up). A diagnostic for tests and hosts; costs one call per block. Default false.
+    /// No longer has an effect: <see cref="DeviceCounters.RenderAllocatedBytes"/> is always kept, because the probe (two reads of a per-thread
+    /// allocation counter per callback) costs less than the noise in a callback's own time. Kept so existing code compiles.
     /// </summary>
     public bool MeasureRenderAllocations { get; init; }
 
