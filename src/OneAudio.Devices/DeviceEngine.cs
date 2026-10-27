@@ -4,13 +4,6 @@ using OneAudio.Loudness;
 
 namespace OneAudio.Devices;
 
-/// <summary>Implemented by streams that need no thread: the caller moves their clock (see <see cref="ManualBackend"/>).</summary>
-internal interface IManualStream
-{
-    /// <summary>Runs the stream for <paramref name="frames"/> frames; returns the frames actually run (0 when stopped or lost).</summary>
-    int Advance(int frames);
-}
-
 /// <summary>
 /// Everything a device does apart from talking to the operating system: the render and capture hand-over, limiting, counters, the played-peak
 /// bookkeeping, and the supervisor that reopens a lost device, follows the default device and keeps time while no device is open.
@@ -39,7 +32,10 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
     private readonly FloatRing? _captureRing;
     private readonly PeakRing _peaks = new(1024);
     private readonly float[] _silent;
-    private readonly LoudnessMeter? _meter;
+    private LoudnessMeter? _meter;
+    private RateAdapter? _adapter;
+    private int _deviceRate;
+    private int _pendingEvents;
     private readonly EventQueue _events = new(64);
     private readonly Lock _lifecycle = new();
     private readonly Lock _fold = new();
@@ -114,8 +110,10 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
     {
         _direction = direction;
         _backend = backend;
-        _options = options;
+        // Backends read the rate and channel count from the options, so they must say what the program renders at.
+        _options = options with { SampleRate = format.SampleRate, Channels = format.Channels };
         _format = format;
+        _deviceRate = format.SampleRate;
         _source = source;
         _renderCallback = renderCallback;
         _captureCallback = captureCallback;
@@ -135,6 +133,8 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
 
     public AudioDeviceFormat Format => _format;
 
+    public AudioDeviceFormat DeviceFormat => Volatile.Read(ref _stream)?.Format ?? _format;
+
     public Lock LifecycleLock => _lifecycle;
 
     public Lock FoldLock => _fold;
@@ -142,6 +142,8 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
     public IAudioDeviceBackend Backend => _backend;
 
     public bool IsManual => _backend.IsManual;
+
+    public bool HasSupervisorThread => _thread is not null;
 
     public FloatRing? CaptureRing => _captureRing;
 
@@ -193,13 +195,22 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
 
         var block = interleaved[..whole];
         long streamStart = Volatile.Read(ref _streamWritten);
-        RunSource(block, streamStart);
+        var adapter = Volatile.Read(ref _adapter);
+        if (adapter is null)
+        {
+            RunSource(block, streamStart);
+            Interlocked.Add(ref _framesRendered, whole / ch);
+        }
+        else
+        {
+            adapter.Fill(block);
+        }
+
         float peak = OutputLimiter.Apply(block, _options.Limiter);
 
         long frames = whole / ch;
         long end = streamStart + frames;
         Volatile.Write(ref _streamWritten, end);
-        Interlocked.Add(ref _framesRendered, frames);
         Interlocked.Add(ref _framesWritten, frames);
         RaiseMax(ref _peakWrittenBits, peak);
         _peaks.Add(end, peak);
@@ -304,11 +315,12 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
             Volatile.Write(ref _meteredFrames, 0);
         }
 
-        _meter!.Process(block);
-        Volatile.Write(ref _momentary, _meter.MomentaryLufs);
-        Volatile.Write(ref _shortTerm, _meter.ShortTermLufs);
-        Volatile.Write(ref _integrated, _meter.IntegratedLufs);
-        Volatile.Write(ref _truePeak, _meter.TruePeakDbtp);
+        var meter = _meter!;
+        meter.Process(block);
+        Volatile.Write(ref _momentary, meter.MomentaryLufs);
+        Volatile.Write(ref _shortTerm, meter.ShortTermLufs);
+        Volatile.Write(ref _integrated, meter.IntegratedLufs);
+        Volatile.Write(ref _truePeak, meter.TruePeakDbtp);
         Interlocked.Add(ref _meteredFrames, block.Length / _format.Channels);
     }
 
@@ -391,7 +403,7 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
                 bufferFrames = s.BufferFrames;
                 periodFrames = s.PeriodFrames;
                 int queued = s.QueuedFrames;
-                latency = (queued > 0 ? queued : bufferFrames) * 1000.0 / _format.SampleRate;
+                latency = (queued > 0 ? queued : bufferFrames) * 1000.0 / s.Format.SampleRate;
             }
         }
 
@@ -517,17 +529,54 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
         }
 
         ArgumentOutOfRangeException.ThrowIfNegative(frames);
-        if (Volatile.Read(ref _disposed) != 0 || !Volatile.Read(ref _started) || Volatile.Read(ref _userSuspended) || Volatile.Read(ref _systemSuspended))
+        if (Volatile.Read(ref _disposed) != 0 || !Volatile.Read(ref _started))
         {
             return 0;
         }
 
-        if (Volatile.Read(ref _stream) is IManualStream manual)
+        // The supervisor's work (reopen after a loss, follow a default change, raise events) happens here, on the caller's thread, and only
+        // when something is pending, so a steady stream of calls takes no lock.
+        if (NeedsTick(Stopwatch.GetTimestamp()))
+        {
+            TickAndDispatch();
+        }
+
+        if (Volatile.Read(ref _userSuspended) || Volatile.Read(ref _systemSuspended))
+        {
+            return 0;
+        }
+
+        var stream = Volatile.Read(ref _stream);
+        if (stream is IManualDevice manual)
         {
             return manual.Advance(frames);
         }
 
+        if (stream is not null)
+        {
+            return 0; // the backend drives its stream itself (it calls Render from its own callbacks)
+        }
+
         return _direction == DeviceDirection.Output ? RenderSilent(frames) : 0;
+    }
+
+    public int WantedFrames => Volatile.Read(ref _stream) is IManualDevice manual ? manual.WantedFrames : 0;
+
+    private bool NeedsTick(long now)
+    {
+        if (Volatile.Read(ref _pendingLost) != 0 || Volatile.Read(ref _pendingDefault) != 0 || Volatile.Read(ref _pendingEvents) != 0
+            || Volatile.Read(ref _xrunFramesPending) != 0
+            || Interlocked.Read(ref _interruptBegan) != Volatile.Read(ref _seenBegan) || Interlocked.Read(ref _interruptEnded) != Volatile.Read(ref _seenEnded))
+        {
+            return true;
+        }
+
+        if (Volatile.Read(ref _stream) is null)
+        {
+            return !Volatile.Read(ref _userSuspended) && !Volatile.Read(ref _systemSuspended) && now >= Volatile.Read(ref _nextRetry);
+        }
+
+        return _requestedId is null && _options.FollowDefault && !_backend.NotifiesDeviceChanges && now >= Volatile.Read(ref _nextDefaultPoll);
     }
 
     /// <summary>Runs one round of supervisor work (reopen, default switch, events). The supervisor thread calls the same code.</summary>
@@ -669,8 +718,9 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
             Emit(DeviceEventKind.Xrun, null, _currentId, xrunFrames.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
 
-        if (_stream is null && !_userSuspended && !_systemSuspended && _direction == DeviceDirection.Output)
+        if (_stream is null && !_userSuspended && !_systemSuspended && _direction == DeviceDirection.Output && !_backend.IsManual)
         {
+            // A manual device is moved by its caller, who renders the silent frames through Advance; no wall clock is involved.
             PaceSilentLocked(now);
         }
 
@@ -707,11 +757,35 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
         IOpenDevice? stream = null;
         string reason;
         bool ok = _backend.TryOpen(_direction, options, this, out stream, out reason) && stream is not null;
-        if (ok && (stream!.Format.SampleRate != _format.SampleRate || stream.Format.Channels != _format.Channels))
+        RateAdapter? adapter = null;
+        if (ok && stream!.Format.Channels != _format.Channels)
         {
-            reason = $"the device runs at {stream.Format.SampleRate} Hz x {stream.Format.Channels} but {_format.SampleRate} Hz x {_format.Channels} was requested";
+            reason = $"the device runs at {stream.Format.Channels} channels but {_format.Channels} were requested";
             stream.Dispose();
             ok = false;
+        }
+        else if (ok && stream!.Format.SampleRate != _format.SampleRate)
+        {
+            double ratio = (double)stream.Format.SampleRate / _format.SampleRate;
+            if (_direction != DeviceDirection.Output || !_options.AllowRateConversion)
+            {
+                reason = $"the device runs at {stream.Format.SampleRate} Hz but {_format.SampleRate} Hz was requested (rate conversion is {(_direction == DeviceDirection.Output ? "switched off by AllowRateConversion" : "only done for output")})";
+            }
+            else if (ratio is < 0.25 or > 16)
+            {
+                reason = $"the device runs at {stream.Format.SampleRate} Hz, too far from the {_format.SampleRate} Hz the program renders at to convert";
+            }
+            else
+            {
+                reason = string.Empty;
+                adapter = new RateAdapter(this, _format.SampleRate, stream.Format.SampleRate, _format.Channels);
+            }
+
+            if (adapter is null)
+            {
+                stream.Dispose();
+                ok = false;
+            }
         }
 
         if (!ok)
@@ -732,7 +806,15 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
             _captureRing?.Clear();
         }
 
-        _currentId = stream!.Device?.Id ?? id;
+        Volatile.Write(ref _adapter, adapter);
+        int deviceRate = stream!.Format.SampleRate;
+        if (_options.Metering && _direction == DeviceDirection.Output && deviceRate != _deviceRate)
+        {
+            _meter = new LoudnessMeter(deviceRate, _format.Channels, ChannelMask.None, truePeak: true, loudnessRange: false);
+        }
+
+        _deviceRate = deviceRate;
+        _currentId = stream.Device?.Id ?? id;
         _lastId = _currentId;
         Volatile.Write(ref _stream, stream);
         bool reopen = _everOpened;
@@ -860,6 +942,7 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
         }
 
         _batch.Add(e);
+        Volatile.Write(ref _pendingEvents, 1);
     }
 
     private void DispatchEvents()
@@ -875,6 +958,7 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
             batch = _batch;
             _batch = _batchSwap;
             _batchSwap = batch;
+            Volatile.Write(ref _pendingEvents, 0);
         }
 
         var handler = Event;
@@ -895,5 +979,56 @@ internal sealed class DeviceEngine : IDeviceEngine, IDisposable
         }
 
         batch.Clear();
+    }
+
+    /// <summary>
+    /// Sits between the program's source and a device that runs at another rate: asks the source for fixed chunks at its own rate and converts
+    /// them to the device's with the library's polyphase resampler, giving the device exactly the frames it asks for. All buffers are made when
+    /// the device opens; <see cref="Fill"/> allocates nothing.
+    /// </summary>
+    private sealed class RateAdapter
+    {
+        private const int ChunkFrames = 512;
+
+        private readonly DeviceEngine _engine;
+        private readonly IResampler _resampler;
+        private readonly float[] _input;
+        private readonly int _channels;
+        private int _position;
+        private int _length;
+
+        public RateAdapter(DeviceEngine engine, int sourceRate, int deviceRate, int channels)
+        {
+            _engine = engine;
+            _channels = channels;
+            _resampler = AudioResampler.Create(sourceRate, deviceRate, channels, ResamplerQuality.Polyphase);
+            _input = new float[ChunkFrames * channels];
+        }
+
+        public void Fill(Span<float> output)
+        {
+            int ch = _channels;
+            int need = output.Length / ch;
+            int done = 0;
+            while (done < need)
+            {
+                if (_position == _length)
+                {
+                    _engine.RunSource(_input, 0);
+                    Interlocked.Add(ref _engine._framesRendered, ChunkFrames);
+                    _position = 0;
+                    _length = ChunkFrames;
+                }
+
+                _resampler.Process(_input.AsSpan(_position * ch, (_length - _position) * ch), output.Slice(done * ch, (need - done) * ch), out int used, out int written);
+                _position += used;
+                done += written;
+                if (used == 0 && written == 0)
+                {
+                    output[(done * ch)..].Clear();
+                    return;
+                }
+            }
+        }
     }
 }

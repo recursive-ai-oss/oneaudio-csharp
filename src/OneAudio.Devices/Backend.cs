@@ -13,8 +13,9 @@ public interface IAudioDeviceBackend
     DeviceBackendKind Kind { get; }
 
     /// <summary>
-    /// When true nothing paces the backend's streams, the device runs no supervisor thread and the caller advances it with
-    /// <see cref="AudioOutputDevice.Advance"/>. Only <see cref="ManualBackend"/> is manual.
+    /// When true nothing paces the backend's streams and the package starts no thread of its own: the caller advances the device with
+    /// <see cref="AudioOutputDevice.Advance"/> (whose streams implement <see cref="IManualDevice"/>), and that call also does the supervisor's work.
+    /// <see cref="ManualBackend"/> is manual; a single-threaded host can write its own.
     /// </summary>
     bool IsManual { get; }
 
@@ -49,7 +50,29 @@ public interface IAudioDeviceBackend
     bool TryOpen(DeviceDirection direction, DeviceStreamOptions options, IDeviceEngine engine, out IOpenDevice? stream, out string reason);
 }
 
-/// <summary>An open, negotiated device stream. Its members may be called from any thread unless stated.</summary>
+/// <summary>
+/// Implemented, besides <see cref="IOpenDevice"/>, by streams that need no thread of their own: the program moves their clock by calling
+/// <see cref="AudioOutputDevice.Advance"/>. This is how a single-threaded host (a browser, a game loop that owns the audio pump) drives a device,
+/// with a backend whose <see cref="IAudioDeviceBackend.IsManual"/> is true. In manual mode the package starts no thread at all.
+/// </summary>
+public interface IManualDevice
+{
+    /// <summary>
+    /// Runs the stream for <paramref name="frames"/> device frames on the calling thread: asks the engine for audio (<see cref="IDeviceEngine.Render"/>) or
+    /// hands it the captured audio (<see cref="IDeviceEngine.Capture"/>) in whatever block sizes suit the device, and moves its position.
+    /// </summary>
+    /// <param name="frames">How many frames to run.</param>
+    /// <returns>The frames actually run; 0 when the stream is paused or lost.</returns>
+    int Advance(int frames);
+
+    /// <summary>
+    /// How many frames the device would like next, for hosts that fill a device-side buffer (for example the free space in a worklet's ring);
+    /// 0 (the default) means it does not say and the host chooses.
+    /// </summary>
+    int WantedFrames => 0;
+}
+
+/// <summary>An open, negotiated device stream. The program that opened it (the engine, through <see cref="IAudioDeviceBackend.TryOpen"/>) disposes it: after <see cref="IDisposable.Dispose"/> no callback is running and the device is released. Its members may be called from any thread unless stated.</summary>
 public interface IOpenDevice : IDisposable
 {
     /// <summary>The format the stream runs at (equal to the one asked for).</summary>

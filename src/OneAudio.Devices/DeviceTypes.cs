@@ -128,6 +128,15 @@ public sealed record DeviceStreamOptions
     public bool FollowDefault { get; init; } = true;
 
     /// <summary>
+    /// For output: when the device runs at another sample rate than the source (a browser's audio context may run at 44.1 or 48 kHz whatever was
+    /// asked), convert in the package with the library's polyphase resampler instead of failing the open. Default true. The device then asks for
+    /// its own number of frames: <see cref="DeviceCounters.FramesWritten"/>, <see cref="DeviceCounters.FramesPlayed"/> and the buffer sizes count
+    /// device frames, <see cref="DeviceCounters.FramesRendered"/> counts the source's frames. The resampler adds a few milliseconds of latency
+    /// and is allocated when the device opens, so the render path still allocates nothing. Ratios between 1/4 and 16 are supported.
+    /// </summary>
+    public bool AllowRateConversion { get; init; } = true;
+
+    /// <summary>
     /// For output: how samples are kept inside -1..1 on their way to the device. Default <see cref="OutputLimiterMode.SoftKnee"/>.
     /// </summary>
     public OutputLimiterMode Limiter { get; init; } = OutputLimiterMode.SoftKnee;

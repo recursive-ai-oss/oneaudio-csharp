@@ -66,6 +66,13 @@ public sealed class ManualBackend : IAudioDeviceBackend
     /// </summary>
     public int LagFrames { get; set; }
 
+    /// <summary>
+    /// The sample rate the simulated devices run at; 0 (the default) means the rate each stream asks for. A different rate lets tests and hosts
+    /// act out a device (a browser's audio context, say) that does not honour the request; the output device then converts if
+    /// <see cref="DeviceStreamOptions.AllowRateConversion"/> allows. Set before opening.
+    /// </summary>
+    public int DeviceSampleRate { get; set; }
+
     /// <summary>The period each stream asks for, in frames. Default 256. Set before opening.</summary>
     public int PeriodFrames { get; set; } = 256;
 
@@ -254,7 +261,7 @@ public sealed class ManualBackend : IAudioDeviceBackend
 
         int period = options.PeriodFrames > 0 ? options.PeriodFrames : PeriodFrames;
         int buffer = options.BufferFrames > 0 ? options.BufferFrames : Math.Max(period * 4, options.LatencyMilliseconds * options.SampleRate / 1000);
-        var s = new ManualStream(this, direction, engine, new AudioDeviceFormat(options.SampleRate, options.Channels), device.Value, period, buffer);
+        var s = new ManualStream(this, direction, engine, new AudioDeviceFormat(DeviceSampleRate > 0 ? DeviceSampleRate : options.SampleRate, options.Channels), device.Value, period, buffer);
         lock (_gate)
         {
             _streams.Add(s);
@@ -329,7 +336,7 @@ public sealed class ManualBackend : IAudioDeviceBackend
         new("manual-in-0", "Manual input 0", DeviceDirection.Input, true, 48_000, 2, 64, DeviceBackendKind.Manual),
     ];
 
-    private sealed class ManualStream : IOpenDevice, IManualStream
+    private sealed class ManualStream : IOpenDevice, IManualDevice
     {
         private readonly ManualBackend _owner;
         private readonly int _channels;

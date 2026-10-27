@@ -90,8 +90,7 @@ public class ManualDeviceTests
         output.Start();
         output.Advance(1000);
         backend.SimulateLoss();
-        Assert.Equal(0, output.Advance(500)); // the lost stream consumes nothing
-        output.Pump();
+        Assert.Equal(500, output.Advance(500)); // the loss is handled by Advance itself, then the new stream plays
 
         var kinds = Kinds(output);
         Assert.Equal([DeviceEventKind.DeviceLost, DeviceEventKind.Reopened], kinds);
@@ -101,8 +100,8 @@ public class ManualDeviceTests
         var c = output.Counters;
         Assert.Equal(1, c.DeviceLosses);
         Assert.Equal(1, c.Reopens);
-        Assert.Equal(1500, c.FramesWritten);
-        Assert.Equal(1500, c.FramesPlayed);
+        Assert.Equal(2000, c.FramesWritten);
+        Assert.Equal(2000, c.FramesPlayed);
         Assert.Equal(0, c.SilentFrames);
     }
 

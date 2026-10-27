@@ -16,6 +16,12 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 - `AlsaBackend` (Linux playback through ALSA, including PipeWire and PulseAudio through their ALSA plug-ins): enumeration, period and buffer negotiation, float or 16-bit,
   underrun recovery, device position from `snd_pcm_delay`, and capture (`Audio.CreateInput`, callback or `Read`).
 - `WasapiBackend` (Windows playback and capture through WASAPI): MMDevice enumeration, shared mode with automatic rate and channel conversion, exclusive mode with format negotiation and a stated refusal, device position from `IAudioClock`, endpoint notifications for default and hot-plug changes, lost-device handling, and the "Pro Audio" scheduler class on the device thread. All COM calls are v-table function pointers, so it is trim and NativeAOT clean. Verified so far by unit tests over hand-built COM objects and by CI on Windows; not yet on real hardware.
+- Single-threaded hosts: `IManualDevice` (public; `Advance(frames)`, optional `WantedFrames`) lets any backend whose `IsManual` is true be stepped by the caller, with no thread started by the package. `AudioOutputDevice.Advance` now also does the supervisor's work (reopen after a loss, default change, retry, events), so `Pump()` is optional; `AudioOutputDevice.WantedFrames` reads the stream's request.
+- `DeviceStreamOptions.AllowRateConversion` (default true): an output device running at another sample rate than the source gets the source converted with the polyphase resampler; `AudioOutputDevice.DeviceFormat` reports the device's format and `ManualBackend.DeviceSampleRate` acts out such a device.
+
+### Fixed
+
+- A source whose rate or channel count differed from the options' defaults (48 kHz stereo) failed to open on backends, which read the format from the options; the source's format is now what the backend is asked for.
 
 ## [1.1.0] - 2026-10-26
 

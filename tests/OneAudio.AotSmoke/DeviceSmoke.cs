@@ -40,6 +40,14 @@ internal static class DeviceSmoke
             AudioDevices.UseBackend(null);
         }
 
+        // A device at another rate than the source: converted in the package, stepped by the caller, no thread.
+        {
+            var odd = new ManualBackend { DeviceSampleRate = 44_100 };
+            using var converted = AudioOutputDevice.Open(mixer, null, odd);
+            converted.Start();
+            if (converted.Advance(4410) != 4410 || converted.Counters.FramesWritten != 4410 || converted.DeviceFormat.SampleRate != 44_100) return Fail("rate conversion");
+        }
+
         // The operating system's own backend, on a PCM that needs no hardware where one exists (ALSA's null device).
         var alsa = new AlsaBackend();
         if (alsa.IsAvailable)
