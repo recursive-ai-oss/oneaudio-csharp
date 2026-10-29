@@ -67,6 +67,10 @@ ENTRIES=(
   "mp3-iso-si_huff-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/si_huff.pcm|468cd5d833fa3e017300128d3a80126412e6d77bdbdcca9e97abace6752cc0be|raw"
   "mp3-iso-sin1k0db-bit|https://fate-suite.ffmpeg.org/mp3-conformance/sin1k0db.bit|64775e23c29aa84e27f68777460f88e0717af2ed64e732d287a20c5a92c9fa3e|raw"
   "mp3-iso-sin1k0db-pcm|https://fate-suite.ffmpeg.org/mp3-conformance/sin1k0db.pcm|4a31caa4ec395b4f4c8efbb1b7fe739f7390a83b78320d078ef53bcb84939e63|raw"
+  # 3GPP digital test sequences for the AMR (TS 26.074) and AMR-WB (TS 26.174) speech decoders. zipr unzips nested archives too.
+  # 3GPP's CDN refuses curl's default user agent, hence the -A below.
+  "amr-nb-ts26074|https://www.3gpp.org/ftp/Specs/archive/26_series/26.074/26074-j00.zip|e4d8771a807023738d7648e374913f0337c1c92e688bd5f4b572d44c5231e881|zipr"
+  "amr-wb-ts26174|https://www.3gpp.org/ftp/Specs/archive/26_series/26.174/26174-j00.zip|bb2eb62db39263bdf047b41d4a3693ad3785b559c29e116043a2cb4f082d908d|zipr"
   # EBU loudness test set v05 (Tech 3341 / 3342 minimum-requirement signals). The EBU site refuses some networks (HTTP 403 from its CDN),
   # so this pins the Internet Archive's copy of https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip; the SHA-256 is that of the EBU file.
   "ebu-loudness-v05|https://web.archive.org/web/20170331172519id_/https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip|9cc500b4df83f7c21855c74dce795ef5209a752bf884253ae57d0ce512efb062|zip"
@@ -82,13 +86,19 @@ for entry in "${ENTRIES[@]}"; do
   dest="$cache/$name"
   if [ -e "$dest/.verified" ] && [ "$(cat "$dest/.verified")" = "$sha" ]; then echo "$name: up to date"; continue; fi
   file="$cache/_dl/$(basename "$url")"
-  [ -f "$file" ] || curl -fL --retry 3 -o "$file" "$url"
+  [ -f "$file" ] || curl -fL --retry 3 -A "oneaudio-fetch/1.0" -o "$file" "$url"
   echo "$sha  $file" | check_sha >/dev/null || { echo "$name: SHA-256 mismatch for $file" >&2; rm -f "$file"; exit 1; }
   rm -rf "$dest"; mkdir -p "$dest"
   case "$kind" in
     tgz) tar -xzf "$file" -C "$dest" ;;
     tgz1) tar -xzf "$file" -C "$dest" --strip-components=1 ;;
     zip) unzip -q "$file" -d "$dest" ;;
+    zipr)
+      unzip -q "$file" -d "$dest"
+      # Unpack archives inside archives (each into a directory named after it) until none are left.
+      while [ -n "$(find "$dest" -name '*.zip' -print -quit)" ]; do
+        find "$dest" -name '*.zip' | while read -r z; do unzip -q -o "$z" -d "${z%.zip}" && rm "$z"; done
+      done ;;
     raw) cp "$file" "$dest/" ;;
     *) echo "unknown archive type $kind" >&2; exit 1 ;;
   esac
