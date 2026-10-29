@@ -12,6 +12,8 @@ public readonly record struct CodecId(string Name)
     public static CodecId Flac => new("flac");
     /// <summary>MPEG audio Layer III.</summary>
     public static CodecId Mp3 => new("mp3");
+    /// <summary>AAC (ISO/IEC 14496-3 audio object types; the packets are raw_data_block payloads and the container supplies the AudioSpecificConfig).</summary>
+    public static CodecId Aac => new("aac");
     /// <summary>Adaptive Multi-Rate narrowband speech, 8 kHz (3GPP TS 26.071). Packets are a table-of-contents byte followed by the speech bits.</summary>
     public static CodecId AmrNb => new("amr-nb");
     /// <summary>Adaptive Multi-Rate wideband speech, 16 kHz (3GPP TS 26.171). Packets are a table-of-contents byte followed by the speech bits.</summary>
@@ -30,12 +32,32 @@ public readonly record struct CodecId(string Name)
 /// <param name="IsHeader">True for codec header packets (identification, comments, setup) that precede audio.</param>
 public readonly ref struct PacketView(ReadOnlySpan<byte> Data, long EndFrame, bool IsHeader)
 {
+    /// <summary>Creates a packet that also carries its container timing.</summary>
+    /// <param name="data">The packet bytes.</param>
+    /// <param name="endFrame">End position in output frames, or -1 when unknown.</param>
+    /// <param name="isHeader">True for header packets.</param>
+    /// <param name="timestamp">Decode time of the first sample, in units of <see cref="IPacketSource.TimeScale"/>.</param>
+    /// <param name="duration">Duration in the same units; 0 when unknown.</param>
+    public PacketView(ReadOnlySpan<byte> data, long endFrame, bool isHeader, long timestamp, long duration)
+        : this(data, endFrame, isHeader)
+    {
+        Timestamp = timestamp;
+        Duration = duration;
+    }
+
     /// <summary>The packet bytes.</summary>
     public ReadOnlySpan<byte> Data { get; } = Data;
     /// <summary>End position in output frames, or -1 when unknown.</summary>
     public long EndFrame { get; } = EndFrame;
     /// <summary>True for header packets.</summary>
     public bool IsHeader { get; } = IsHeader;
+    /// <summary>
+    /// Decode time of this packet's first sample in <see cref="IPacketSource.TimeScale"/> units, measured from the start of the
+    /// track's media (before any priming is removed). 0 when the container gives no timing.
+    /// </summary>
+    public long Timestamp { get; }
+    /// <summary>Duration in <see cref="IPacketSource.TimeScale"/> units, or 0 when unknown.</summary>
+    public long Duration { get; }
 }
 
 /// <summary>
@@ -72,6 +94,29 @@ public interface IPacketSource : IDisposable
     /// from there and discards <c>frame - startFrame</c> frames to land exactly on target.</param>
     /// <exception cref="NotSupportedException"><see cref="CanSeek"/> is false.</exception>
     void SeekToFrame(long frame, out long startFrame);
+
+    /// <summary>
+    /// Codec configuration bytes that live in the container rather than in header packets: for AAC the
+    /// AudioSpecificConfig (ISO/IEC 14496-3 1.6.2.1) exactly as stored, for AMR in 3GP the <c>damr</c> payload. Empty when the
+    /// codec needs none or carries its setup in header packets.
+    /// </summary>
+    ReadOnlyMemory<byte> CodecConfig => default;
+
+    /// <summary>Sample rate in Hz as the container declares it, or 0 when the codec's own headers define it.</summary>
+    int SampleRate => 0;
+
+    /// <summary>Channel count as the container declares it, or 0 when the codec's own headers define it.</summary>
+    int Channels => 0;
+
+    /// <summary>Units per second of <see cref="PacketView.Timestamp"/> and <see cref="PacketView.Duration"/>, or 0 when packets carry no timing.</summary>
+    int TimeScale => 0;
+
+    /// <summary>
+    /// Frames, at <see cref="SampleRate"/>, that the container says the decoder's output starts early by (encoder delay or an
+    /// edit-list start offset). The codec drops this many frames from the start of its output; <see cref="LengthFrames"/> and
+    /// <see cref="SeekToFrame"/> positions are counted after them.
+    /// </summary>
+    int PrimingFrames => 0;
 }
 
 /// <summary>Turns a packet stream of one codec into an <see cref="IAudioDecoder"/>. Registered explicitly so unused codecs trim away.</summary>
@@ -84,7 +129,8 @@ public interface IAudioCodec
     /// Reads the codec's header packets from <paramref name="packets"/> and returns a decoder over the rest.
     /// The decoder takes ownership of <paramref name="packets"/> and disposes it.
     /// </summary>
-    /// <param name="packets">Packets of this codec, positioned at the first header.</param>
+    /// <param name="packets">Packets of this codec, positioned at the first header. Containers that keep codec setup out of the
+    /// packet stream (MP4, ADTS, AMR files) have no header packets and expose it through <see cref="IPacketSource.CodecConfig"/>.</param>
     /// <param name="limits">Limits to enforce before allocating.</param>
     /// <exception cref="AudioFormatException">The headers are invalid.</exception>
     /// <exception cref="AudioLimitExceededException">A header asks for more than <paramref name="limits"/> allow.</exception>
@@ -103,6 +149,12 @@ public interface IContainerFormat
     /// </summary>
     /// <param name="head">The start of the stream.</param>
     bool Matches(ReadOnlySpan<byte> head);
+
+    /// <summary>
+    /// File name extensions (lowercase, with the leading dot) conventionally used by this format. Used only as a fallback
+    /// when <see cref="Matches"/> finds nothing at the start of a file. Empty when the format declares none.
+    /// </summary>
+    IReadOnlyList<string> Extensions => [];
 
     /// <summary>
     /// Opens the stream, positioned at its start, as a decoder. Containers that carry compressed packets build an
