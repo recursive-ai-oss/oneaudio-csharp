@@ -3,7 +3,7 @@
     <PackageId>$(OneAudioPackageId).Devices</PackageId>
     <RootNamespace>OneAudio.Devices</RootNamespace>
     <!-- Versioned in lockstep with the core package; the release workflow checks the tag against both. -->
-    <Version Condition="'$(Version)' == ''">1.3.0</Version>
+    <Version Condition="'$(Version)' == ''">1.4.0</Version>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
     <Description>Audio device playback and capture for OneAudio: WASAPI, Core Audio, ALSA and AAudio over the operating system's own libraries, with no dependencies beyond the base class library.</Description>

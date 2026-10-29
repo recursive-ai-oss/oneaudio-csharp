@@ -11,6 +11,8 @@ Audio decode, encode, resample, mix and analyse for .NET 10, written from the pu
 | Ogg Vorbis | yes | no |
 | Ogg Opus | yes | yes |
 | MP3 (MPEG-1/2/2.5 Layer III) | yes, gapless with LAME headers | no |
+| AAC-LC (M4A/MP4/3GP, ADTS) | mono and stereo up to 48 kHz, gapless | no |
+| AMR / AMR-WB (.amr, .awb, 3GP) | yes, bit-exact with the 3GPP reference | no |
 
 Every decoder streams (`Read` into a span you provide, nothing allocated per call) and seeks to the exact frame. Malformed input raises a typed `OneAudioException`; sizes read from a file are checked against `AudioLimits` before anything is allocated.
 
@@ -19,7 +21,7 @@ Every decoder streams (`Read` into a span you provide, nothing allocated per cal
 ```csharp
 using OneAudio;
 
-var clip = Audio.Load("hit.wav");                          // any supported format, decoded to float (WAV, Ogg, Vorbis, Opus, FLAC, MP3)
+var clip = Audio.Load("hit.wav");                          // any supported format, decoded to float (WAV, Ogg, Vorbis, Opus, FLAC, MP3, AAC, AMR)
 var mixer = Audio.CreateMixer();                           // 48 kHz stereo, 64 voices, limiter on the master
 mixer.Play("hit.wav", new PlayOptions { Gain = 0.8f, Pan = -0.3f });   // short effect: loaded and played
 using var music = mixer.PlayStream("music.ogg", loop: true);           // long sound: decoded ahead on a background thread

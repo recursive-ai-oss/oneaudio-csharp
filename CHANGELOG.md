@@ -5,6 +5,10 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-29
+
+AAC-LC and AMR/AMR-WB decoding, with MP4/M4A/3GP, ADTS and AMR file containers. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.
+
 ### Added
 
 - Containers for AAC and AMR (without an AAC codec registered, opening an AAC file throws `UnsupportedAudioFormatException` naming the missing codec):

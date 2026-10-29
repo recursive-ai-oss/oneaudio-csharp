@@ -105,6 +105,8 @@ Each row is checked against an outside oracle or a published vector set. Third-p
 | FLAC decode | IETF CELLAR flac-test-files against `flac` 1.4.3 and the STREAMINFO MD5 | `subset` 64 of 64 bit-exact; `uncommon` 11 of 11 as expected; `faulty` 11 of 11 cleanly rejected |
 | FLAC encode | output decoded by `flac -d` and by this library | bit-exact; file size within 0.4% of `flac` at levels 0 to 8 |
 | MP3 decode | ISO/IEC 11172-4 compliance streams against their reference PCM | 11 of 11 within the full-accuracy limits (RMS below 2^-15/sqrt(12), max abs at most 2^-14 of full scale) at 16-bit rounding; agrees with `mpg123` 1.33.7 to 1.2e-6 on 113 LAME/ffmpeg-encoded files, except where mpg123 itself departs from the reference (`he_mode`) |
+| AAC-LC decode | ISO/IEC 14496-26 AAC-LC mono/stereo streams (8 to 48 kHz) against their 24-bit reference waveforms | 72 of 72 exact streams within RMS below 2^-15/sqrt(12) and max abs at most 2^-14 (measured RMS at most 1.4e-7); 18 of 18 noise-substitution streams (informative in the suite) within 0.09 dB of the reference band energy; agrees with ffmpeg 8.0.1 to 2.4e-7 (136 dB SNR) on 11 files it encoded |
+| AMR / AMR-WB decode | 3GPP TS 26.074 and TS 26.174 decoder test sequences | 573 of 573 and 221 of 221 bit-exact; damaged-frame streams identical to the 3GPP reference decoders |
 | Loudness | EBU Tech 3341 cases 1 to 23 and Tech 3342 cases 1 to 6 | all within the stated tolerances |
 | Tests | full Release suite | linux-x64 1417 passed, 0 failed; linux-arm64 under QEMU 0 failed; osx-arm64 (Apple M-series) 1187 passed, 0 failed; NativeAOT smoke app clean on all three |
 
