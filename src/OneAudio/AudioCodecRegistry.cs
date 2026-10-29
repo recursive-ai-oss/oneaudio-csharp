@@ -54,4 +54,21 @@ public sealed class AudioCodecRegistry
             if (c.Matches(head)) return c;
         return null;
     }
+
+    /// <summary>
+    /// Finds the registered container format that lists <paramref name="extension"/> among its <see cref="IContainerFormat.Extensions"/>.
+    /// Content sniffing with <see cref="Detect"/> is more reliable; this is the fallback for files whose start does not identify them.
+    /// </summary>
+    /// <param name="extension">A file extension with or without the leading dot, compared ignoring case.</param>
+    /// <returns>The first matching format, or null.</returns>
+    public IContainerFormat? DetectByExtension(string? extension)
+    {
+        if (string.IsNullOrEmpty(extension)) return null;
+        ReadOnlySpan<char> ext = extension.AsSpan().TrimStart('.');
+        if (ext.IsEmpty) return null;
+        foreach (var c in _containers)
+            foreach (var e in c.Extensions)
+                if (e.AsSpan().TrimStart('.').Equals(ext, StringComparison.OrdinalIgnoreCase)) return c;
+        return null;
+    }
 }

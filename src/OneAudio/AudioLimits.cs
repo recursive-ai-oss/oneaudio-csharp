@@ -32,6 +32,13 @@ public sealed record AudioLimits
     /// <summary>Most chunks, pages or similar container elements walked while looking for what is needed. Default 100,000.</summary>
     public int MaxContainerElements { get; init; } = 100_000;
 
+    /// <summary>
+    /// Most samples (packets) one MP4 track may have, and the most entries any one sample-table box may declare. Default 8,388,608
+    /// (about 46 hours of 20 ms AMR frames, or 53 hours of 1024-sample AAC frames at 44.1 kHz). The tables of all audio tracks
+    /// in one file together may hold four times this many entries.
+    /// </summary>
+    public int MaxSamples { get; init; } = 8 * 1024 * 1024;
+
     /// <summary>Throws if <paramref name="channels"/> is outside 1..<see cref="MaxChannels"/>.</summary>
     /// <param name="channels">Channel count read from input.</param>
     /// <exception cref="AudioFormatException">The count is not positive.</exception>
@@ -82,6 +89,14 @@ public sealed record AudioLimits
     public void CheckSetupBytes(long bytes)
     {
         if (bytes > MaxSetupBytes) throw new AudioLimitExceededException(nameof(MaxSetupBytes), MaxSetupBytes, bytes);
+    }
+
+    /// <summary>Throws if <paramref name="count"/> samples or table entries exceed <see cref="MaxSamples"/>.</summary>
+    /// <param name="count">Count read from input.</param>
+    /// <exception cref="AudioLimitExceededException">The count exceeds the limit.</exception>
+    public void CheckSamples(long count)
+    {
+        if (count > MaxSamples) throw new AudioLimitExceededException(nameof(MaxSamples), MaxSamples, count);
     }
 
     /// <summary>Throws if <paramref name="count"/> container elements exceed <see cref="MaxContainerElements"/>.</summary>

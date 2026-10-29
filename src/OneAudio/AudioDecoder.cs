@@ -24,6 +24,15 @@ public static class AudioDecoder
         AudioLimits? limits = null,
         bool leaveOpen = false,
         CancellationToken cancellationToken = default)
+        => OpenCore(stream, registry, limits, leaveOpen, null, cancellationToken);
+
+    private static IAudioDecoder OpenCore(
+        Stream stream,
+        AudioCodecRegistry registry,
+        AudioLimits? limits,
+        bool leaveOpen,
+        string? extension,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(registry);
@@ -46,12 +55,16 @@ public static class AudioDecoder
         }
 
         var format = registry.Detect(head[..n])
+            ?? registry.DetectByExtension(extension)
             ?? throw new UnsupportedAudioFormatException("No registered container format recognises this data.");
         // Replay wrapper must not close the caller's stream if the caller said leaveOpen, or if opening fails.
         return format.Open(source, registry, limits, leaveOpen, cancellationToken);
     }
 
-    /// <summary>Opens a file by path with <see cref="Open"/>. The decoder owns the file stream.</summary>
+    /// <summary>
+    /// Opens a file by path with <see cref="Open"/>; when the start of the file is not recognised, the file name extension picks the
+    /// format (see <see cref="AudioCodecRegistry.DetectByExtension"/>). The decoder owns the file stream.
+    /// </summary>
     /// <param name="path">File path.</param>
     /// <param name="registry">The formats and codecs to try.</param>
     /// <param name="limits">Limits for untrusted input; <see cref="AudioLimits.Default"/> when null.</param>
@@ -60,7 +73,7 @@ public static class AudioDecoder
     public static IAudioDecoder OpenFile(string path, AudioCodecRegistry registry, AudioLimits? limits = null, CancellationToken cancellationToken = default)
     {
         var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan);
-        try { return Open(fs, registry, limits, leaveOpen: false, cancellationToken); }
+        try { return OpenCore(fs, registry, limits, false, Path.GetExtension(path), cancellationToken); }
         catch { fs.Dispose(); throw; }
     }
 }

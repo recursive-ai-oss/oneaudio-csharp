@@ -9,6 +9,8 @@ Every file under `testdata/` is our own material, licensed MIT OR Apache-2.0 lik
   - `flac/`: `tools/gen_flac_seeds.py`
   - `mp3/`: `tools/gen-mp3-testset.py`
   - `opus/`: `tools/gen-opus-testdata.sh`
+  - `containers/`: `tools/gen-container-testdata.sh` (MP4/M4A/3GP/ADTS via ffmpeg; AMR frames from `tools/gen-amr-testdata.py`, whose payloads are
+    pseudo-random bytes of the right sizes, not speech; `tools/add-itunsmpb.py` adds the iTunes gapless tag)
   - `transients/`: `tools/gen-transient-testdata.py` (see its README)
 - `fuzz/`: small inputs that once crashed or misled a parser, minimised from our own seeds.
 
