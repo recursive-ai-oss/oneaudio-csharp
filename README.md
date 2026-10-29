@@ -8,20 +8,20 @@ Package id `RecursiveAI.OneAudio`, namespace `OneAudio`. License: MIT OR Apache-
 
 - **One-call layer** (`Audio`): `Load`, `Open`, `mixer.Play(path)` / `PlayStream`, `Transcode`, `Resample`, `Measure`, `Normalize`, with every codec registered by default.
 - Format-detecting open (`AudioDecoder.Open`) with explicit registration of containers and codecs (`AddWav`, `AddOgg`, `AddVorbis`, `AddOpus`, `AddFlac`, `AddMp3`), so unused codecs trim away.
-- **Decode:** WAV / RF64 (PCM 8/16/24/32-bit, IEEE float 32/64, `WAVE_FORMAT_EXTENSIBLE`), Ogg (chained streams, seeking), Vorbis, Opus, FLAC (native and in Ogg, bit-exact integer reads, STREAMINFO MD5 check) and MP3 (MPEG-1/2/2.5 Layer III, ID3v2, Xing/LAME gapless). Streaming into caller-provided spans, sample-accurate seeking everywhere.
+- **Decode:** WAV / RF64 (PCM 8/16/24/32-bit, IEEE float 32/64, `WAVE_FORMAT_EXTENSIBLE`), Ogg (chained streams, seeking), Vorbis, Opus, FLAC (native and in Ogg, bit-exact integer reads, STREAMINFO MD5 check) MP3 (MPEG-1/2/2.5 Layer III, ID3v2, Xing/LAME gapless), AAC-LC (mono and stereo up to 48 kHz, in M4A/MP4/3GP and ADTS, gapless) and AMR / AMR-WB speech (.amr, .awb, 3GP). Streaming into caller-provided spans, sample-accurate seeking everywhere.
 - **Encode:** WAV / RF64 (`WavEncoder`), FLAC levels 0 to 8 (`FlacEncoder`) and Opus (`OpusEncoder`, `OpusMultistreamEncoder`, Ogg Opus writer `OpusFileWriter`). Encoders produce identical bytes for identical input on a platform.
 - **Resampling:** `Polyphase` (Kaiser-windowed sinc), `PolyphaseFast` and `Linear`, independent of how the input is split into blocks.
 - **The mixer** (`AudioMixer`): voices, a bus graph with sub-mixes, ducking, multichannel mapping, per-voice pitch, gain, pan, loops, fades, crossfade, voice cap with priority, streaming sources with a decode-ahead pump and underrun accounting, and low-pass / high-pass filters, a reverb and a lookahead limiter. The render callback allocates nothing and takes no locks.
 - **Loudness** (`LoudnessMeter`): BS.1770-5 / EBU R 128 momentary, short-term, integrated, loudness range and true peak, any sample rate, allocation-free; a normalisation gain helper.
 - **Devices** (`RecursiveAI.OneAudio.Devices`, a separate package): `Audio.Play(mixer)` plays on the default output device and `Audio.CreateInput()` records from the default input, with device enumeration, default-device following, reopening after a lost device, and counters read from the device's own position (frames written and played, played peak, underruns, losses, reopens). Backends: ALSA on Linux, AAudio on Android, Core Audio on macOS and iOS, WASAPI on Windows; single-threaded hosts (such as a browser) can step a device themselves through `IManualDevice`.
-- Not included: spatial audio, MIDI, AAC, MP3 Layers I and II, MP3 and Vorbis encoding.
+- Not included: spatial audio, MIDI, HE-AAC and multichannel AAC, MP3 Layers I and II, MP3 and Vorbis encoding.
 
 ## Quick look
 
 ```csharp
 using OneAudio;
 
-var clip = Audio.Load("hit.wav");                          // any supported format, decoded to float (WAV, Ogg, Vorbis, Opus, FLAC, MP3)
+var clip = Audio.Load("hit.wav");                          // any supported format, decoded to float (WAV, Ogg, Vorbis, Opus, FLAC, MP3, AAC, AMR)
 var mixer = Audio.CreateMixer();                           // 48 kHz stereo, 64 voices, limiter on the master
 mixer.Play("hit.wav", new PlayOptions { Gain = 0.8f, Pan = -0.3f });   // short effect: loaded and played
 using var music = mixer.PlayStream("music.ogg", loop: true);           // long sound: decoded ahead on a background thread

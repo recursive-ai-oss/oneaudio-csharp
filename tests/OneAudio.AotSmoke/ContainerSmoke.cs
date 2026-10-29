@@ -11,7 +11,7 @@ internal static class ContainerSmoke
 {
     public static int Run()
     {
-        var registry = new AudioCodecRegistry().AddMp4().AddAdts().AddAmr();
+        var registry = new AudioCodecRegistry().AddMp4().AddAdts().AddAmr().AddAac();
 
         // AMR: 30 frames of 4.75 kbit/s (TOC byte 0x04, 12 speech bytes).
         var amr = new List<byte>("#!AMR\n"u8.ToArray());
@@ -36,6 +36,17 @@ internal static class ContainerSmoke
             if (s.CodecConfig.Span[0] != 0x12 || s.CodecConfig.Span[1] != 0x10) return Fail("adts config");
             s.SeekToFrame(1024 * 9, out _);
             if (!s.TryReadPacket(out var p) || p.Data.Length != 10 || p.Data[0] != 27) return Fail("adts seek");
+        }
+
+        // AAC-LC decode: 5 silent mono 44.1 kHz frames in ADTS (SCE, gain 0, no bands, END).
+        var silent = new List<byte>();
+        for (int i = 0; i < 5; i++) { silent.AddRange(new byte[] { 0xFF, 0xF1, 0x50, 0x40, 0x01, 0x7F, 0xFC, 0x00, 0x00, 0x00, 0x07 }); }
+        using (var d = AudioDecoder.Open(new MemoryStream(silent.ToArray()), registry))
+        {
+            var pcm = new float[1024];
+            int total = 0, n;
+            while ((n = d.Read(pcm)) > 0) { for (int i = 0; i < n; i++) if (pcm[i] != 0f) return Fail("aac not silent"); total += n; }
+            if (d.Format.SampleRate != 44100 || d.Format.Channels != 1 || total != 5 * 1024) return Fail("aac decode length " + total);
         }
 
         // 3GP with an AMR-NB track of 12 frames in two chunks.

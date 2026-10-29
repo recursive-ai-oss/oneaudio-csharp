@@ -74,6 +74,24 @@ public sealed class HappyPathTests : IDisposable
         Assert.True(expected.AsSpan().SequenceEqual(fromStream.Samples.Span));
     }
 
+    [Theory]
+    [InlineData("aac-stereo.mp4", 2)]
+    [InlineData("aac-moov-first.m4a", 2)]
+    [InlineData("aac-mono.3gp", 1)]
+    [InlineData("aac.aac", 2)]
+    public void Open_and_Load_decode_aac_files(string name, int channels)
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "testdata", "containers", name);
+        using (var d = Audio.Open(path))
+        {
+            Assert.Equal(channels, d.Format.Channels);
+            Assert.True(d.CanSeek);
+        }
+        var clip = Audio.Load(path);
+        Assert.True(clip.Frames > 1024);
+        Assert.Contains(clip.Samples.ToArray(), s => Math.Abs(s) > 0.01f);
+    }
+
     [Fact]
     public void Open_gives_a_streaming_decoder_with_every_codec()
     {
