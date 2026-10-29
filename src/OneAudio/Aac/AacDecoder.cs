@@ -89,6 +89,9 @@ public sealed class AacDecoder : IAudioDecoder
     /// <summary>True once an access unit carried SBR data in a fill element that this decoder skipped (implicit HE-AAC signalling).</summary>
     public bool SbrDataIgnored => _core.SbrDataSeen;
 
+    /// <summary>The coding tools the frames decoded so far have used; a diagnostic for conformance reports.</summary>
+    public AacTools ToolsSeen => _core.Tools;
+
     /// <summary>
     /// When true, a malformed access unit is concealed (and counted) instead of throwing <see cref="AudioFormatException"/>.
     /// Unsupported features always throw. Default false.

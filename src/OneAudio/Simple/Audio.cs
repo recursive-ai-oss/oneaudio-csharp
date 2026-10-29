@@ -203,5 +203,5 @@ public static class Audio
 /// <summary>Holds the all-codecs registry apart from <see cref="Audio"/> so that only the calls that need it keep the codecs.</summary>
 internal static class DefaultKit
 {
-    public static readonly AudioKit Instance = new(new AudioCodecRegistry().AddWav().AddOgg().AddVorbis().AddOpus().AddFlac().AddAdts().AddMp3().AddMp4().AddAmr());
+    public static readonly AudioKit Instance = new(new AudioCodecRegistry().AddWav().AddOgg().AddVorbis().AddOpus().AddFlac().AddAdts().AddMp3().AddMp4().AddAmr().AddAac());
 }

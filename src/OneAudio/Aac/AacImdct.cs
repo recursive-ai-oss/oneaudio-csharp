@@ -11,7 +11,7 @@ internal sealed class AacImdct
 {
     private readonly int _m;
     private readonly int _half;       // M/2, the FFT size
-    private readonly float[] _twRe;   // exp(-i*pi*(4j+1)/(4M)) for j < M/2
+    private readonly float[] _twRe;   // exp(-i*pi*(j+1/8)/M) for j < M/2
     private readonly float[] _twIm;
     private readonly float[] _fftRe;  // FFT twiddles exp(-2 pi i k / (M/2)), k < M/4
     private readonly float[] _fftIm;
@@ -29,7 +29,7 @@ internal sealed class AacImdct
         _twIm = new float[_half];
         for (int j = 0; j < _half; j++)
         {
-            double a = -Math.PI * (4 * j + 1) / (4.0 * m);
+            double a = -Math.PI * (8 * j + 1) / (8.0 * m); // the extra 1/4 step of the DCT-IV phase is split between pre and post twiddle
             _twRe[j] = (float)Math.Cos(a);
             _twIm[j] = (float)Math.Sin(a);
         }

@@ -317,10 +317,14 @@ public class ContainerTests
     [Fact]
     public void ContainersAreSniffedAndTheMissingCodecIsReported()
     {
+        // AddAac registers the AAC-LC decoder, so these open; without it the codec is named.
         foreach (var (name, codec) in new[] { ("aac-moov-last.m4a", "aac"), ("aac.aac", "aac") })
         {
             using var fs = File.OpenRead(ContainerTestEnv.TestData(name));
-            var ex = Assert.Throws<UnsupportedAudioFormatException>(() => AudioDecoder.Open(fs, ContainerTestEnv.Registry, leaveOpen: true));
+            using (AudioDecoder.Open(fs, ContainerTestEnv.Registry, leaveOpen: true)) { }
+            fs.Position = 0;
+            var noAac = new AudioCodecRegistry().AddMp4().AddAdts();
+            var ex = Assert.Throws<UnsupportedAudioFormatException>(() => AudioDecoder.Open(fs, noAac, leaveOpen: true));
             Assert.Contains(codec, ex.Message, StringComparison.Ordinal);
             Assert.True(fs.CanRead); // the stream is left to the caller when opening fails
         }

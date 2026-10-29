@@ -16,6 +16,9 @@ internal sealed partial class AacFrameDecoder
     private static readonly float[] QuarterSteps = [1f, 1.18920711500272f, 1.4142135623731f, 1.68179283050743f];
 
     private readonly int _channels;
+    private readonly int[]? _frontTags;
+    private readonly bool[]? _frontIsCpe;
+    private readonly bool[] _filled;
     private readonly short[] _longBands;
     private readonly short[] _shortBands;
     private readonly int _longBandCount;
@@ -34,9 +37,15 @@ internal sealed partial class AacFrameDecoder
     /// <summary>True once any frame carried an SBR fill extension (HE-AAC data riding on the core stream), which is skipped.</summary>
     internal bool SbrDataSeen { get; private set; }
 
+    /// <summary>Tools seen in the frames decoded so far.</summary>
+    internal AacTools Tools { get; private set; }
+
     internal AacFrameDecoder(AacAudioConfig config)
     {
         _channels = config.Channels;
+        _frontTags = config.FrontTags;
+        _frontIsCpe = config.FrontIsCpe;
+        _filled = new bool[_channels];
         switch (AacAudioConfig.RateIndexToSupportedTable(config.SampleRateIndex))
         {
             case 0: case 1: // 48000, 44100
@@ -88,6 +97,7 @@ internal sealed partial class AacFrameDecoder
         var br = new AacBitReader(unit);
         int done = 0;
         bool end = false;
+        Array.Clear(_filled);
         while (!end)
         {
             if (br.BitsLeft < 3) throw new AudioFormatException("An AAC access unit ends before its end element.");
@@ -95,20 +105,22 @@ internal sealed partial class AacFrameDecoder
             switch (id)
             {
                 case 0: // SCE
-                    if (done + 1 > _channels) throw new AudioFormatException("An AAC access unit has more channels than the stream configuration.");
-                    br.Skip(4); // element_instance_tag
-                    ReadChannelStream(ref br, _ch[done], commonWindow: false);
+                {
+                    int slot = Slot((int)br.Read(4), false, done, 1);
+                    ReadChannelStream(ref br, _ch[slot], commonWindow: false);
                     CheckOverrun(in br);
-                    ApplyPns(_ch[done], null, 0);
-                    ApplyTns(_ch[done]);
+                    ApplyPns(_ch[slot], null, 0);
+                    ApplyTns(_ch[slot]);
                     done += 1;
                     break;
+                }
                 case 1: // CPE
-                    if (done + 2 > _channels) throw new AudioFormatException("An AAC access unit has more channels than the stream configuration.");
-                    br.Skip(4);
-                    ReadPair(ref br, _ch[done], _ch[done + 1]);
+                {
+                    int slot = Slot((int)br.Read(4), true, done, 2);
+                    ReadPair(ref br, _ch[slot], _ch[slot + 1]);
                     done += 2;
                     break;
+                }
                 case 2:
                     throw new UnsupportedAudioFormatException("AAC coupling channel elements are not supported.");
                 case 3:
@@ -135,6 +147,46 @@ internal sealed partial class AacFrameDecoder
             var t = _ch[c].Time;
             for (int i = 0; i < FrameSize; i++) pcm[i * _channels + c] = t[i];
         }
+    }
+
+    private void Note(AacChannelState c)
+    {
+        if (c.PulsePresent) Tools |= AacTools.Pulse;
+        if (c.TnsPresent) Tools |= AacTools.Tns;
+        if (c.WindowShape == 1) Tools |= AacTools.KbdWindow;
+        if (c.IsShort) { Tools |= AacTools.ShortBlocks; if (c.NumGroups < 8) Tools |= AacTools.WindowGrouping; }
+        for (int g = 0; g < c.NumGroups; g++)
+            for (int b = 0; b < c.MaxSfb; b++)
+                switch (c.Codebook[g * 16 + b])
+                {
+                    case NoiseBook: Tools |= AacTools.Pns; break;
+                    case IntensityBook: case IntensityBook2: Tools |= AacTools.Intensity; break;
+                }
+    }
+
+    // Finds the output channel of an element: by its instance tag when the config listed the front elements, otherwise in order.
+    private int Slot(int tag, bool pair, int done, int width)
+    {
+        int slot = done;
+        if (_frontTags is { } tags)
+        {
+            slot = -1;
+            int at = 0;
+            for (int i = 0; i < tags.Length; i++)
+            {
+                int w = _frontIsCpe![i] ? 2 : 1;
+                if (tags[i] == tag && _frontIsCpe[i] == pair) { slot = at; break; }
+                at += w;
+            }
+            if (slot < 0) throw new AudioFormatException("An AAC element has an instance tag that the program config element does not list.");
+        }
+        if (slot + width > _channels) throw new AudioFormatException("An AAC access unit has more channels than the stream configuration.");
+        for (int i = 0; i < width; i++)
+        {
+            if (_filled[slot + i]) throw new AudioFormatException("An AAC access unit has two elements for the same channel.");
+            _filled[slot + i] = true;
+        }
+        return slot;
     }
 
     private static void CheckOverrun(in AacBitReader br)
@@ -173,7 +225,7 @@ internal sealed partial class AacFrameDecoder
         if (count > 0 && br.BitsLeft >= 4)
         {
             uint ext = br.Peek(4);
-            if (ext is 0xD or 0xE) SbrDataSeen = true;
+            if (ext is 0xD or 0xE) { SbrDataSeen = true; Tools |= AacTools.SbrFill; }
         }
         br.Skip(count * 8);
     }
@@ -226,6 +278,7 @@ internal sealed partial class AacFrameDecoder
                         if (l.Codebook[i] == NoiseBook && r.Codebook[i] == NoiseBook) _msUsed[i] = 0;
                     }
                 }
+            for (int i = 0; i < _msUsed.Length; i++) if (_msUsed[i] != 0) { Tools |= AacTools.MidSide; break; }
             ApplyMidSide(l, r);
         }
         ApplyIntensity(l, r, common);
@@ -260,6 +313,7 @@ internal sealed partial class AacFrameDecoder
         CheckOverrun(in br);
         ReadSpectralData(ref br, c);
         Dequantize(c);
+        Note(c);
     }
 
     // 14496-3 4.4.2.1 ics_info

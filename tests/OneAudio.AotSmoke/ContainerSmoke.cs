@@ -11,7 +11,7 @@ internal static class ContainerSmoke
 {
     public static int Run()
     {
-        var registry = new AudioCodecRegistry().AddMp4().AddAdts().AddAmr();
+        var registry = new AudioCodecRegistry().AddMp4().AddAdts().AddAmr().AddAac();
 
         // AMR: 30 frames of 4.75 kbit/s (TOC byte 0x04, 12 speech bytes).
         var amr = new List<byte>("#!AMR\n"u8.ToArray());

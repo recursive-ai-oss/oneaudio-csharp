@@ -29,7 +29,7 @@ public sealed class AacAudioConfig
     /// </summary>
     public int Channels { get; private set; }
 
-    /// <summary>True when the program config element lists anything beyond front channel elements (side, back, LFE, data or coupling elements).</summary>
+    /// <summary>True when the program config element lists anything beyond front channel elements (side, back, LFE or coupling channels; associated data elements are skipped).</summary>
     public bool ProgramConfigIsComplex { get; private set; }
 
     /// <summary>True when frameLengthFlag selected 960-sample frames instead of 1024.</summary>
@@ -52,6 +52,11 @@ public sealed class AacAudioConfig
 
     /// <summary>The output sampling rate announced together with SBR, or 0.</summary>
     public int ExtensionSampleRate { get; private set; }
+
+    // Front elements of a program config element in channel order: the instance tag of each and whether it is a channel pair.
+    // The elements of a frame are placed in the output by their tag, not by their position in the frame.
+    internal int[]? FrontTags { get; private set; }
+    internal bool[]? FrontIsCpe { get; private set; }
 
     /// <summary>True when the channel layout is carried in a program config element inside the config (channelConfiguration 0).</summary>
     public bool HasProgramConfigElement => ChannelConfiguration == 0;
@@ -169,7 +174,7 @@ public sealed class AacAudioConfig
         if (ObjectType != 2)
             throw new UnsupportedAudioFormatException($"AAC audio object type {ObjectType} is not supported; only AAC-LC (2) is.");
         if (ProgramConfigIsComplex)
-            throw new UnsupportedAudioFormatException("AAC program config elements with side, back, LFE, data or coupling channels are not supported.");
+            throw new UnsupportedAudioFormatException("AAC program config elements with side, back, LFE or coupling channels are not supported.");
         if (Channels is < 1 or > 2)
             throw new UnsupportedAudioFormatException(ChannelConfiguration == 0
                 ? $"AAC with {Channels} channels in its program config element is not supported; mono and stereo are."
@@ -193,18 +198,23 @@ public sealed class AacAudioConfig
         if (br.ReadBit()) br.Skip(3);
         if (br.BitsLeft < front * 5 + side * 5 + back * 5 + lfe * 4 + assoc * 4 + cc * 5) return false;
         int channels = 0;
+        var tags = new int[front];
+        var cpe = new bool[front];
         for (int i = 0; i < front; i++)
         {
-            channels += br.ReadBit() ? 2 : 1; // is_cpe
-            br.Skip(4);                       // element_instance_tag
+            cpe[i] = br.ReadBit();
+            channels += cpe[i] ? 2 : 1;
+            tags[i] = (int)br.Read(4);
         }
+        FrontTags = tags;
+        FrontIsCpe = cpe;
         br.Skip(side * 5 + back * 5 + lfe * 4 + assoc * 4 + cc * 5);
         br.ByteAlign();
         if (br.BitsLeft < 8) return false;
         int comment = (int)br.Read(8);
         if (br.BitsLeft < comment * 8) return false;
         br.Skip(comment * 8);
-        ProgramConfigIsComplex = side + back + lfe + assoc + cc != 0;
+        ProgramConfigIsComplex = side + back + lfe + cc != 0; // associated data elements are data stream elements, which are skipped
         Channels = channels;
         return true;
     }

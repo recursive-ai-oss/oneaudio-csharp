@@ -11,7 +11,7 @@ namespace OneAudio.Tests;
 /// <summary>Test files for the MP4, ADTS and AMR readers, and ffprobe as the packet oracle (black-box, tests only).</summary>
 internal static class ContainerTestEnv
 {
-    public static readonly AudioCodecRegistry Registry = new AudioCodecRegistry().AddMp4().AddAdts().AddAmr();
+    public static readonly AudioCodecRegistry Registry = new AudioCodecRegistry().AddMp4().AddAdts().AddAmr().AddAac();
 
     public static string TestData(string name) => Path.Combine(AppContext.BaseDirectory, "testdata", "containers", name);
 
