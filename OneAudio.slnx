@@ -22,5 +22,7 @@
     <Project Path="fuzz/OneAudio.Fuzz.Mp4/OneAudio.Fuzz.Mp4.csproj" />
     <Project Path="fuzz/OneAudio.Fuzz.Adts/OneAudio.Fuzz.Adts.csproj" />
     <Project Path="fuzz/OneAudio.Fuzz.Amr/OneAudio.Fuzz.Amr.csproj" />
+    <Project Path="fuzz/OneAudio.Fuzz.AmrNb/OneAudio.Fuzz.AmrNb.csproj" />
+    <Project Path="fuzz/OneAudio.Fuzz.AmrWb/OneAudio.Fuzz.AmrWb.csproj" />
   </Folder>
 </Solution>

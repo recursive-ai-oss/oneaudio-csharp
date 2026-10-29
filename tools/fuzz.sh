@@ -5,7 +5,7 @@
 #   tools/fuzz.sh run <target> [seconds] [-- <libFuzzer flags>]
 #   tools/fuzz.sh replay <target> <file>...   run saved inputs through the plain (uninstrumented) build
 #
-# <target> is the suffix of a project under fuzz/ (fuzz/OneAudio.Fuzz.<Target>), for example wav, ogg, vorbis, mp3, mp4, adts, amr.
+# <target> is the suffix of a project under fuzz/ (fuzz/OneAudio.Fuzz.<Target>), for example wav, ogg, vorbis, mp3, mp4, adts, amr, amrnb, amrwb.
 # Environment:
 #   ONEAUDIO_FUZZ_HOME  tools and per-target work directories (default ~/.cache/oneaudio-fuzz)
 #   ONEAUDIO_CORPUS     fetched corpus (tools/fetch-corpus.sh) used to seed the Ogg-based targets
@@ -95,6 +95,11 @@ seed() {
                      { printf '\000'; cat "$f"; } > "$corpus/$(basename "${f%.*}").seed"
                      { printf '\001'; cat "$f"; } > "$corpus/$(basename "${f%.*}")-fwd.seed"
                    done
+                 done ;;
+    amrnb|amrwb) # Raw runs of storage-format frames: the AMR files without their magic line.
+                 local ext=amr; [ "$target" = amrwb ] && ext=awb
+                 find "$here/testdata" -type f -iname "*.$ext" -size -256k | while read -r f; do
+                   tail -c +$(( $(head -n 1 "$f" | wc -c) + 1 )) "$f" > "$corpus/$(basename "${f%.*}").seed"
                  done ;;
   esac
   if [ -z "$(ls -A "$corpus")" ]; then printf 'RIFF' > "$corpus/empty.seed"; fi

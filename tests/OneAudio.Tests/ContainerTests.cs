@@ -317,12 +317,23 @@ public class ContainerTests
     [Fact]
     public void ContainersAreSniffedAndTheMissingCodecIsReported()
     {
-        foreach (var (name, codec) in new[] { ("aac-moov-last.m4a", "aac"), ("aac.aac", "aac"), ("amrnb.3gp", "amr-nb"), ("synthetic-wb.awb", "amr-wb"), ("synthetic-nb.amr", "amr-nb") })
+        foreach (var (name, codec) in new[] { ("aac-moov-last.m4a", "aac"), ("aac.aac", "aac") })
         {
             using var fs = File.OpenRead(ContainerTestEnv.TestData(name));
             var ex = Assert.Throws<UnsupportedAudioFormatException>(() => AudioDecoder.Open(fs, ContainerTestEnv.Registry, leaveOpen: true));
             Assert.Contains(codec, ex.Message, StringComparison.Ordinal);
             Assert.True(fs.CanRead); // the stream is left to the caller when opening fails
+        }
+
+        // AddAmr registers the AMR decoders, so these open; without them the codec is named.
+        foreach (var (name, codec) in new[] { ("amrnb.3gp", "amr-nb"), ("synthetic-wb.awb", "amr-wb"), ("synthetic-nb.amr", "amr-nb") })
+        {
+            using var fs = File.OpenRead(ContainerTestEnv.TestData(name));
+            using (AudioDecoder.Open(fs, ContainerTestEnv.Registry, leaveOpen: true)) { }
+            fs.Position = 0;
+            var bare = new AudioCodecRegistry().Add(Mp4Format.Instance).Add(AmrFormat.Instance);
+            var ex = Assert.Throws<UnsupportedAudioFormatException>(() => AudioDecoder.Open(fs, bare, leaveOpen: true));
+            Assert.Contains(codec, ex.Message, StringComparison.Ordinal);
         }
     }
 
