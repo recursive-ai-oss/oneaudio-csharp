@@ -681,12 +681,14 @@ internal sealed partial class AmrWbCore
         mem[22] = 21845;
     }
 
+    private static readonly short[] Pred = [4096, 3277, 2458, 1638];
+
     private void DGain2(short index, short nbits, short[] code, int lSubfr, out short gainPit, out int gainCod,
         short bfi, short prevBfi, short state, short unusableFrame, short vadHist)
     {
         short[] mem = _decGain;
         const int pastQuaEn = 0, pastGainPit = 4, pastGainCode = 5, prevGc = 6, pbuf = 7, gbuf = 12, pbuf2 = 17;
-        short[] pred = [4096, 3277, 2458, 1638];
+
 
         int lTmp = DotProduct12(code, 0, code, 0, lSubfr, out short exp);
         exp = Sub(exp, 18 + 6);
@@ -736,10 +738,10 @@ internal sealed partial class AmrWbCore
 
         lTmp = LDepositH(30); // MEAN_ENER
         lTmp = LShl(lTmp, 8);
-        lTmp = LMac(lTmp, pred[0], mem[pastQuaEn]);
-        lTmp = LMac(lTmp, pred[1], mem[pastQuaEn + 1]);
-        lTmp = LMac(lTmp, pred[2], mem[pastQuaEn + 2]);
-        lTmp = LMac(lTmp, pred[3], mem[pastQuaEn + 3]);
+        lTmp = LMac(lTmp, Pred[0], mem[pastQuaEn]);
+        lTmp = LMac(lTmp, Pred[1], mem[pastQuaEn + 1]);
+        lTmp = LMac(lTmp, Pred[2], mem[pastQuaEn + 2]);
+        lTmp = LMac(lTmp, Pred[3], mem[pastQuaEn + 3]);
         short gcode0 = ExtractH(lTmp);
 
         lTmp = LMult(gcode0, 5443);
