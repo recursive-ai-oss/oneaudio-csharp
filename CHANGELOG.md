@@ -5,7 +5,18 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+### Added
+
+- Containers for AAC and AMR, ahead of their decoders (no AAC or AMR codec is registered yet, so opening such a file throws `UnsupportedAudioFormatException` naming the missing codec):
+  - `Mp4PacketSource` / `AddMp4()`: MP4, M4A, 3GP and 3G2 audio tracks (ISO/IEC 14496-12, 3GPP TS 26.244) with `mp4a` (the AudioSpecificConfig is passed on untouched), `samr` and `sawb` sample entries. Only the movie box is parsed, whether it comes before or after the media data; packets are read one sample at a time, with exact per-packet timestamps and durations, sample-exact seeking, track selection (`Tracks`, `SelectTrack`), priming and trimming from the edit list or the iTunes `iTunSMPB` tag (the tag wins when well formed), and `Title`/`Artist`/`Comments` from iTunes `ilst` and 3GPP `udta` boxes. A forward-only stream works when the movie box comes first. Fragmented files are rejected with a typed error.
+  - `AdtsPacketSource` / `AddAdts()`: raw AAC in ADTS framing, with the AudioSpecificConfig built from the frame header, ID3v2 skipping and seeking by scanning.
+  - `AmrPacketSource` / `AddAmr()` and `AmrFrameTable`: AMR and AMR-WB storage-format files (RFC 4867 section 5) with 20 ms frame seeking.
+  - `Audio.Open` and friends now recognise these containers.
+- Additive container API: `IPacketSource.CodecConfig`, `SampleRate`, `Channels`, `TimeScale` and `PrimingFrames` (default interface members), `PacketView.Timestamp`/`Duration`, `CodecId.Aac`/`AmrNb`/`AmrWb`, `IContainerFormat.Extensions` with `AudioCodecRegistry.DetectByExtension` (used by `AudioDecoder.OpenFile` when the start of the file is not recognised), and `AudioLimits.MaxSamples`.
+
 ### Checked
+
+- Packet bytes, sizes, timestamps and durations equal `ffprobe -show_packets` (ffmpeg 8.0.1) for every packet of our generated M4A (moov first and last), MP4, 3GP (AAC, AMR-NB, AMR-WB), iTunes-style gapless M4A, two-track MP4, ADTS (through an `-c copy` remux, which strips the ADTS headers) and AMR/AWB files, and of 7 of 9 ISO/IEC 14496-26 conformance MP4s (the other two cannot be opened by ffprobe at all; they are checked against their own sample tables). Seeking to random times returns the packet containing the time; 120 s of fuzzing per reader found no crash.
 
 - WASAPI playback on real hardware: a Windows 11 laptop (build 26200) with Realtek High Definition Audio speakers, as the default output in shared mode (32-bit float, 480-frame period, 1056-frame buffer, 22 ms reported latency), both from a service session and from the logged-in desktop session. Over five seconds of a -34 dBFS tone `FramesPlayed` advanced about 48,000 frames per second from the device clock, `PeakPlayed` was 0.0200, `Underruns`, `DeviceUnderruns`, `CallbackFaults` and `RenderAllocatedBytes` were 0, the longest render took under 1 ms, suspend held the position and resume continued, and an unknown device id was refused with a reason. Not yet checked on real hardware: WASAPI exclusive mode, capture from a real microphone, and default-device and hot-plug changes.
 

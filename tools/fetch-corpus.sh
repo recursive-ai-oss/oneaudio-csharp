@@ -70,6 +70,16 @@ ENTRIES=(
   # EBU loudness test set v05 (Tech 3341 / 3342 minimum-requirement signals). The EBU site refuses some networks (HTTP 403 from its CDN),
   # so this pins the Internet Archive's copy of https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip; the SHA-256 is that of the EBU file.
   "ebu-loudness-v05|https://web.archive.org/web/20170331172519id_/https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip|9cc500b4df83f7c21855c74dce795ef5209a752bf884253ae57d0ce512efb062|zip"
+  # MPEG-4 audio conformance streams in MP4 (ISO/IEC 14496-26, ISO publicly-available licence): container tests only, fetch-only.
+  "aac-iso-aabper01|https://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_14496-26_2010_Bitstreams/DVD1/mpeg4audio-conformance/compressedMp4/aabper01.mp4|769d15bf99389a5935beb6a8b2b3e191652382926ef4a1f60796d0632c5a243c|raw"
+  "aac-iso-Abv3_Aab01|https://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_14496-26_2010_Bitstreams/DVD1/mpeg4audio-conformance/compressedMp4/Abv3_Aab01.mp4|3f80f9be377c345dc7dbc87cd5cd1c7b9821a29d60db26e815347c69566f5420|raw"
+  "aac-iso-Abv3_Acc04|https://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_14496-26_2010_Bitstreams/DVD1/mpeg4audio-conformance/compressedMp4/Abv3_Acc04.mp4|cdff3b131fda73e61e3fd7c6fd1b068d19a9f7819b9700937e6dae31a32b7902|raw"
+  "aac-iso-Abv3_T3da01|https://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_14496-26_2010_Bitstreams/DVD1/mpeg4audio-conformance/compressedMp4/Abv3_T3da01.mp4|615ef71274bbf26f06ccaff54f6dfa5f9938f408786370b2bed57c19d103f4b7|raw"
+  "aac-iso-ac12|https://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_14496-26_2010_Bitstreams/DVD1/mpeg4audio-conformance/compressedMp4/ac12.mp4|1f8373622039251716c2d8b5c93d4ed5721d1982eb52cd6143b13b5d2405bff9|raw"
+  "aac-iso-al14_08|https://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_14496-26_2010_Bitstreams/DVD1/mpeg4audio-conformance/compressedMp4/al14_08.mp4|7cd303f9dcdbfbe389fad837526d0dc13ee985061caec173a79237660fc52f68|raw"
+  "aac-iso-al960_sbr_e_48_1|https://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_14496-26_2010_Bitstreams/DVD1/mpeg4audio-conformance/compressedMp4/al960_sbr_e_48_1.mp4|e945ab3ed2b5095e618af25043197e17b4ba348a79a20a8134037df0fac12eac|raw"
+  "aac-iso-Abv3_Acc01|https://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_14496-26_2010_Bitstreams/DVD1/mpeg4audio-conformance/compressedMp4/Abv3_Acc01.mp4|a0ebc6f54b974e0084ff3edcaebdd04d19499c7cfe629c5e9baa415c57c2dda3|raw"
+  "aac-iso-Abv3_Ws03|https://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_14496-26_2010_Bitstreams/DVD1/mpeg4audio-conformance/compressedMp4/Abv3_Ws03.mp4|c95e82f2e334a7a311b06b9126f47174af91bcfdefb2d408be87913ac7071bb7|raw"
 )
 
 mkdir -p "$cache/_dl"

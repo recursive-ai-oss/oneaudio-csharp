@@ -5,7 +5,7 @@
 #   tools/fuzz.sh run <target> [seconds] [-- <libFuzzer flags>]
 #   tools/fuzz.sh replay <target> <file>...   run saved inputs through the plain (uninstrumented) build
 #
-# <target> is the suffix of a project under fuzz/ (fuzz/OneAudio.Fuzz.<Target>), for example wav, ogg, vorbis, mp3.
+# <target> is the suffix of a project under fuzz/ (fuzz/OneAudio.Fuzz.<Target>), for example wav, ogg, vorbis, mp3, mp4, adts, amr.
 # Environment:
 #   ONEAUDIO_FUZZ_HOME  tools and per-target work directories (default ~/.cache/oneaudio-fuzz)
 #   ONEAUDIO_CORPUS     fetched corpus (tools/fetch-corpus.sh) used to seed the Ogg-based targets
@@ -87,6 +87,15 @@ seed() {
                    { printf '\001'; head -c 65536 "$f"; } > "$corpus/$(basename "$f" .opus).seed"
                  done
                  head -c 600 /dev/urandom | { printf '\000'; cat; } > "$corpus/random-packets.seed" ;;
+    mp4|adts|amr) # The first byte picks the stream type (bit 0: forward-only); the rest is the file.
+                 local pat
+                 case "$target" in mp4) pat='*.m4a *.mp4 *.3gp';; adts) pat='*.aac';; amr) pat='*.amr *.awb';; esac
+                 for ext in $pat; do
+                   find "$here/testdata" ${ONEAUDIO_CORPUS:+"$ONEAUDIO_CORPUS"} -type f -iname "$ext" -size -256k 2>/dev/null | while read -r f; do
+                     { printf '\000'; cat "$f"; } > "$corpus/$(basename "${f%.*}").seed"
+                     { printf '\001'; cat "$f"; } > "$corpus/$(basename "${f%.*}")-fwd.seed"
+                   done
+                 done ;;
   esac
   if [ -z "$(ls -A "$corpus")" ]; then printf 'RIFF' > "$corpus/empty.seed"; fi
 }
