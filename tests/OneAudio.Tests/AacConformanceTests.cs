@@ -98,10 +98,12 @@ internal static class AacTestEnv
 /// The AAC-LC conformance streams of ISO/IEC 14496-26 against their reference waveforms, plus the typed errors for the
 /// streams outside what the decoder implements. The streams are fetched by tools/fetch-aac-conformance.sh.
 /// <para>
-/// Accuracy criterion (the "RMS/LSB measurement" of ISO/IEC 14496-4 that 3GPP TS 26.406 5.1 points to, with accuracy
-/// level K): the RMS of the difference to the reference, in units where 1.0 is 16-bit full scale, must be at most
-/// 2^-15/sqrt(12), which is K = 15 with K = -log2(rms * sqrt(12)); the largest difference must be at most 2^-14. The
-/// reference waveforms are 24-bit, so they carry no 16-bit rounding of their own.
+/// Accuracy criterion we apply. It is our definition, not a quotation of the ISO text (ISO/IEC 14496-4 is not available
+/// to us). The RMS bound is reconstructed: 2^-15/sqrt(12) is the RMS of uniform rounding noise at half a 16-bit LSB
+/// (the same figure MP3's ISO/IEC 11172-4 "full accuracy" uses), written as accuracy level K = -log2(rms * sqrt(12)) with
+/// 1.0 as 16-bit full scale, so the bound is K >= 15; the 3GPP TS 26.406 conformance criteria point to such an RMS/LSB
+/// measurement. The maximum-difference bound of 2^-14 is borrowed from the same MP3 definition (ISO/IEC 11172-4) and is
+/// not taken from an AAC document. The reference waveforms are 24-bit, so they carry no 16-bit rounding of their own.
 /// </para>
 /// </summary>
 public class AacConformanceTests
