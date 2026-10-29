@@ -12,6 +12,10 @@ public readonly record struct CodecId(string Name)
     public static CodecId Flac => new("flac");
     /// <summary>MPEG audio Layer III.</summary>
     public static CodecId Mp3 => new("mp3");
+    /// <summary>Adaptive Multi-Rate narrowband speech, 8 kHz (3GPP TS 26.071). Packets are a table-of-contents byte followed by the speech bits.</summary>
+    public static CodecId AmrNb => new("amr-nb");
+    /// <summary>Adaptive Multi-Rate wideband speech, 16 kHz (3GPP TS 26.171). Packets are a table-of-contents byte followed by the speech bits.</summary>
+    public static CodecId AmrWb => new("amr-wb");
 
     /// <inheritdoc />
     public override string ToString() => Name;

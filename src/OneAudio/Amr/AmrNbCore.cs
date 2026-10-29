@@ -105,6 +105,9 @@ internal sealed partial class AmrNbCore : AmrFixed
     private readonly short[] _synthOut = new short[LFrame];
 
     private short _prevMode;
+
+    /// <summary>Mode of the last frame that carried one.</summary>
+    internal int PrevMode => _prevMode;
     private bool _homed = true;
 
     public AmrNbCore()

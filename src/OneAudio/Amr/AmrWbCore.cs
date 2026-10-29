@@ -63,7 +63,7 @@ internal sealed partial class AmrWbCore : AmrFixed
     private readonly short[] _memSynHf = new short[M16k];
     private readonly short[] _memHf = new short[30];
     private readonly short[] _memHf3 = new short[30];
-    private short _seed, _seed2, _seed3, _oldT0, _oldT0Frac;
+    private short _seed, _seed2, _seed3, _oldT0;
     private readonly short[] _lagHist = new short[5];
     private readonly short[] _decGain = new short[23];
     private readonly short[] _dispMem = new short[8];
@@ -99,6 +99,9 @@ internal sealed partial class AmrWbCore : AmrFixed
     private int _bitPos;
 
     private short _prevMode;
+
+    /// <summary>Mode of the last frame that carried one (the mode reused for SID, lost and no-data frames).</summary>
+    internal int PrevMode => _prevMode;
     private bool _homed = true;
 
     public AmrWbCore()
@@ -112,7 +115,6 @@ internal sealed partial class AmrWbCore : AmrFixed
     {
         Array.Clear(_oldExc);
         Array.Clear(_pastIsfq);
-        _oldT0Frac = 0;
         _oldT0 = 64;
         _firstFrame = 1;
         _lGcThres = 0;
@@ -390,7 +392,7 @@ internal sealed partial class AmrWbCore : AmrFixed
             ResetDecoder(false);
             Array.Copy(isf, _isfold, M);
             _prevBfi = bfi;
-            _dtxSt.DtxGlobalState = newDtxState;
+            _dtxSt.DtxGlobalState = (short)newDtxState;
             return;
         }
 
@@ -638,7 +640,6 @@ internal sealed partial class AmrWbCore : AmrFixed
                 for (int i = 4; i > 0; i--) _lagHist[i] = _lagHist[i - 1];
                 _lagHist[0] = t0;
                 _oldT0 = t0;
-                _oldT0Frac = 0;
             }
 
             Array.Copy(oldExc, eb, exc2, 0, LSubfr);
@@ -783,7 +784,7 @@ internal sealed partial class AmrWbCore : AmrFixed
         Array.Copy(oldExc, LFrame, _oldExc, 0, PitMax + LInterpol);
         ScaleSig(oldExc, ExcOff, LFrame, Sub(0, qNew));
         DtxDecActivityUpdate(isf, oldExc, ExcOff);
-        _dtxSt.DtxGlobalState = newDtxState;
+        _dtxSt.DtxGlobalState = (short)newDtxState;
         _prevBfi = bfi;
     }
 

@@ -138,7 +138,10 @@ internal sealed partial class AmrWbCore
         isp[m - 1] = Shl(isf[m - 1], 1);
         for (int i = 0; i < m; i++)
         {
-            short ind = Shr(isp[i], 7);
+            // Garbage ISFs from a damaged stream can exceed the table; clamp so the lookup stays in range (valid
+            // streams never reach the clamp).
+            short ind = Math.Min(Shr(isp[i], 7), (short)(table.Length - 2));
+            if (ind < 0) ind = 0;
             short offset = (short)(isp[i] & 0x007f);
             int lTmp = LMult(Sub(table[ind + 1], table[ind]), offset);
             isp[i] = Add(table[ind], ExtractL(LShr(lTmp, 8)));
@@ -277,23 +280,6 @@ internal sealed partial class AmrWbCore
     // ---------------------------------------------------------------------------------------------------------
     // ISF vector dequantization (qpisf_2s.c, qisf_ns.c; TS 26.190 section 6.1)
 
-    private static void ReorderIsf(Span<short> isf, short minDist, int n, Fx f)
-    {
-        short isfMin = minDist;
-        for (int i = 0; i < n - 1; i++)
-        {
-            if (isf[i] < isfMin) isf[i] = isfMin;
-            isfMin = f.AddPub(isf[i], minDist);
-        }
-    }
-
-    private short AddPub(short a, short b) => Add(a, b);
-
-    private readonly struct Fx(AmrWbCore c)
-    {
-        public short AddPub(short a, short b) => c.Add(a, b);
-    }
-
     private void ReorderIsf(short[] isf, short minDist, int n)
     {
         short isfMin = minDist;
@@ -306,7 +292,6 @@ internal sealed partial class AmrWbCore
 
     private void Dpisf2s46b(short[] indice, short[] isfQ, short[] pastIsfq, short[] isfold, short[] isfBuf, short bfi, bool encDec)
     {
-        const short mu = 10923;
         DpisfCommon(indice, isfQ, pastIsfq, isfold, isfBuf, bfi, encDec, false);
     }
 
