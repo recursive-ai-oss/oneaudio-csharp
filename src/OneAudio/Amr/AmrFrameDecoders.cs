@@ -27,7 +27,6 @@ public sealed class AmrNbDecoder : IAmrFrameDecoder
     /// <summary>Samples in the 20 ms of audio each frame produces, 160.</summary>
     public const int SamplesPerFrame = 160;
 
-    private static readonly byte[] PayloadBytes = [12, 13, 15, 17, 19, 20, 26, 31, 5];
     private static readonly short[] PayloadBits = [95, 103, 118, 134, 148, 159, 204, 244, 35];
 
     private static readonly short[][] Sort =
@@ -66,8 +65,8 @@ public sealed class AmrNbDecoder : IAmrFrameDecoder
         }
         else
         {
-            if (frame.Length != 1 + PayloadBytes[ft])
-                throw new AudioFormatException($"AMR frame type {ft} needs {PayloadBytes[ft]} payload bytes, found {frame.Length - 1}.");
+            if (frame.Length != 1 + AmrFrameTable.PayloadBytes(false, ft))
+                throw new AudioFormatException($"AMR frame type {ft} needs {AmrFrameTable.PayloadBytes(false, ft)} payload bytes, found {frame.Length - 1}.");
             ReadOnlySpan<byte> data = frame.Slice(1);
             short[] sort = Sort[ft];
             int bits = PayloadBits[ft];
@@ -154,8 +153,6 @@ public sealed class AmrWbDecoder : IAmrFrameDecoder
     /// <summary>Samples in the 20 ms of audio each frame produces, 320.</summary>
     public const int SamplesPerFrame = 320;
 
-    private static readonly byte[] PayloadBytes = [17, 23, 32, 36, 40, 46, 50, 58, 60, 5];
-
     private static readonly short[][] Sort =
     [
         AmrWbTables.Sort660, AmrWbTables.Sort885, AmrWbTables.Sort1265, AmrWbTables.Sort1425, AmrWbTables.Sort1585,
@@ -192,8 +189,8 @@ public sealed class AmrWbDecoder : IAmrFrameDecoder
         }
         else
         {
-            if (frame.Length != 1 + PayloadBytes[ft])
-                throw new AudioFormatException($"AMR-WB frame type {ft} needs {PayloadBytes[ft]} payload bytes, found {frame.Length - 1}.");
+            if (frame.Length != 1 + AmrFrameTable.PayloadBytes(true, ft))
+                throw new AudioFormatException($"AMR-WB frame type {ft} needs {AmrFrameTable.PayloadBytes(true, ft)} payload bytes, found {frame.Length - 1}.");
             ReadOnlySpan<byte> data = frame.Slice(1);
             short[] sort = Sort[ft];
             count = AmrWbCore.NbOfBits[ft];

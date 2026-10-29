@@ -47,14 +47,19 @@ internal static class ContainerSmoke
             if (start != 160 * 8 || !s.TryReadPacket(out var p) || p.Data.Length != 13 || p.Data[1] != 40) return Fail("3gp seek");
         }
 
-        // No AMR or AAC codec is registered: a typed error names it.
+        // AddAmr registers the AMR decoders too, so the 3GP opens and decodes; without them a typed error names the codec.
+        using (var d = AudioDecoder.Open(new MemoryStream(threeGp), registry))
+        {
+            var pcm = new float[160];
+            if (d.Read(pcm) != 160) return Fail("3gp amr decode");
+        }
         try
         {
-            using var d = AudioDecoder.Open(new MemoryStream(threeGp), registry);
+            using var d = AudioDecoder.Open(new MemoryStream(threeGp), new AudioCodecRegistry().AddMp4());
             return Fail("3gp opened without a codec");
         }
         catch (UnsupportedAudioFormatException ex) when (ex.Message.Contains("amr-nb", StringComparison.Ordinal)) { }
-        Console.WriteLine("ok: amr, adts and 3gp containers read, sought and rejected cleanly without a codec");
+        Console.WriteLine("ok: amr, adts and 3gp containers read and sought, 3gp decoded, and rejected cleanly without a codec");
         return 0;
     }
 
