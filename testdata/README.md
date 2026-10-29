@@ -14,5 +14,5 @@ Every file under `testdata/` is our own material, licensed MIT OR Apache-2.0 lik
   - `transients/`: `tools/gen-transient-testdata.py` (see its README)
 - `fuzz/`: small inputs that once crashed or misled a parser, minimised from our own seeds.
 
-Third-party test vectors and corpora (Opus, Vorbis, FLAC, MP3 compliance and EBU loudness material) are not committed;
-`tools/fetch-corpus.sh` downloads them by pinned URL and SHA-256.
+Third-party test vectors and corpora (Opus, Vorbis, FLAC, MP3, AAC and AMR conformance material and EBU loudness material) are not committed;
+`tools/fetch-corpus.sh` (and `tools/fetch-aac-conformance.sh` for the AAC streams) downloads them by pinned URL and SHA-256.

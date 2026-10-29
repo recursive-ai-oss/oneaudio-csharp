@@ -7,7 +7,7 @@ Package id `RecursiveAI.OneAudio`, namespace `OneAudio`. License: MIT OR Apache-
 ## What works today
 
 - **One-call layer** (`Audio`): `Load`, `Open`, `mixer.Play(path)` / `PlayStream`, `Transcode`, `Resample`, `Measure`, `Normalize`, with every codec registered by default.
-- Format-detecting open (`AudioDecoder.Open`) with explicit registration of containers and codecs (`AddWav`, `AddOgg`, `AddVorbis`, `AddOpus`, `AddFlac`, `AddMp3`), so unused codecs trim away.
+- Format-detecting open (`AudioDecoder.Open`) with explicit registration of containers and codecs (`AddWav`, `AddOgg`, `AddVorbis`, `AddOpus`, `AddFlac`, `AddMp3`, `AddMp4`, `AddAdts`, `AddAac`, `AddAmr`), so unused codecs trim away.
 - **Decode:** WAV / RF64 (PCM 8/16/24/32-bit, IEEE float 32/64, `WAVE_FORMAT_EXTENSIBLE`), Ogg (chained streams, seeking), Vorbis, Opus, FLAC (native and in Ogg, bit-exact integer reads, STREAMINFO MD5 check) MP3 (MPEG-1/2/2.5 Layer III, ID3v2, Xing/LAME gapless), AAC-LC (mono and stereo up to 48 kHz, in M4A/MP4/3GP and ADTS, gapless) and AMR / AMR-WB speech (.amr, .awb, 3GP). Streaming into caller-provided spans, sample-accurate seeking everywhere.
 - **Encode:** WAV / RF64 (`WavEncoder`), FLAC levels 0 to 8 (`FlacEncoder`) and Opus (`OpusEncoder`, `OpusMultistreamEncoder`, Ogg Opus writer `OpusFileWriter`). Encoders produce identical bytes for identical input on a platform.
 - **Resampling:** `Polyphase` (Kaiser-windowed sinc), `PolyphaseFast` and `Linear`, independent of how the input is split into blocks.
@@ -61,7 +61,7 @@ kit.Play(mixer, "hit.wav");
 
 | Variant | Size |
 |---|---|
-| `Audio.Load` (default registry, every decoder) | 1 963 464 bytes |
+| `Audio.Load` (default registry, every decoder) | 2 304 392 bytes |
 | `AudioKit` over a WAV-only registry | 1 448 920 bytes |
 | low-level API with a WAV-only registry | 1 436 504 bytes |
 
@@ -77,7 +77,7 @@ The API is described in [docs/api.md](docs/api.md).
 | `src/OneAudio.Devices/` | audio devices (playback and capture, `RecursiveAI.OneAudio.Devices`); `Interop/` is the only place unsafe code may live in it |
 | `tests/OneAudio.Tests/` | xUnit v3 tests |
 | `tests/OneAudio.Devices.Tests/` | xUnit v3 tests for the device layer |
-| `tests/OneAudio.AotSmoke/` | NativeAOT console app: open WAV, decode, mix |
+| `tests/OneAudio.AotSmoke/` | NativeAOT console app: decode every format, encode, mix, meter, devices |
 | `tests/OneAudio.AotSize/` | three tiny NativeAOT apps for comparing published size (`-p:Variant=` default, kit or wav) |
 | `bench/OneAudio.Benchmarks/` | BenchmarkDotNet |
 | `fuzz/` | SharpFuzz targets |
@@ -85,11 +85,11 @@ The API is described in [docs/api.md](docs/api.md).
 
 ## Building
 
-`dotnet build OneAudio.slnx` and `dotnet test --project tests/OneAudio.Tests/OneAudio.Tests.csproj`. Build output goes to `$ONEAUDIO_ARTIFACTS` (default: `.oneaudio-artifacts` beside the checkout), never into the tree. Third-party test material is downloaded by `tools/fetch-corpus.sh` and never committed.
+`dotnet build OneAudio.slnx` and `dotnet test --project tests/OneAudio.Tests/OneAudio.Tests.csproj`. Build output goes to `$ONEAUDIO_ARTIFACTS` (default: `.oneaudio-artifacts` beside the checkout), never into the tree. Third-party test material is downloaded by `tools/fetch-corpus.sh` and `tools/fetch-aac-conformance.sh` and never committed.
 
 ## Clean room
 
-The codecs are written from the published specifications (RIFF/WAVE, RFC 3533, Vorbis I, RFC 6716/8251, RFC 9639, ISO/IEC 11172-3, ITU-R BS.1770). Other implementations are used only as black-box test oracles.
+The codecs are written from the published specifications (RIFF/WAVE, RFC 3533, Vorbis I, RFC 6716/8251, RFC 9639, ISO/IEC 11172-3, ISO/IEC 14496-12, RFC 4867, the 3GPP AMR, AMR-WB and Enhanced aacPlus specifications with their reference code, ITU-R BS.1770). Other implementations are used only as black-box test oracles.
 
 ## Results
 
@@ -108,13 +108,13 @@ Each row is checked against an outside oracle or a published vector set. Third-p
 | AAC-LC decode | ISO/IEC 14496-26 AAC-LC mono/stereo streams (8 to 48 kHz) against their 24-bit reference waveforms | 72 of 72 exact streams within RMS below 2^-15/sqrt(12) and max abs at most 2^-14 (measured RMS at most 1.4e-7); 18 of 18 noise-substitution streams (informative in the suite) within 0.09 dB of the reference band energy; agrees with ffmpeg 8.0.1 to 2.4e-7 (136 dB SNR) on 11 files it encoded |
 | AMR / AMR-WB decode | 3GPP TS 26.074 and TS 26.174 decoder test sequences | 573 of 573 and 221 of 221 bit-exact; damaged-frame streams identical to the 3GPP reference decoders |
 | Loudness | EBU Tech 3341 cases 1 to 23 and Tech 3342 cases 1 to 6 | all within the stated tolerances |
-| Tests | full Release suite | linux-x64 1417 passed, 0 failed; linux-arm64 under QEMU 0 failed; osx-arm64 (Apple M-series) 1187 passed, 0 failed; NativeAOT smoke app clean on all three |
+| Tests | full Release suite, at 1.0.0 | linux-x64 1417 passed, 0 failed; linux-arm64 under QEMU 0 failed; osx-arm64 (Apple M-series) 1187 passed, 0 failed; NativeAOT smoke app clean on all three |
 
 Known gaps: the 8 kHz MPEG-2.5 mixed-block case has no reference stream; the Opus decoder's CELT packet-loss concealment follows its own rules rather than the reference's (conformance vectors do not exercise it).
 
 ### Fuzzing
 
-SharpFuzz targets under libFuzzer (`tools/fuzz.sh`), one per parser, seeded from the test data and the fetched corpora; one worker per target, 660 s each, all six in parallel on one machine (AMD Ryzen 9 7950X3D, 32 threads, Linux 7.0, .NET 10.0.400).
+SharpFuzz targets under libFuzzer (`tools/fuzz.sh`), one per parser, seeded from the test data and the fetched corpora; one worker per target, 660 s each, all six in parallel on one machine, before 1.0.0 (the targets added since, for the MP4, ADTS and AMR readers and the AMR and AAC decoders, have had 120 s runs without a crash) (AMD Ryzen 9 7950X3D, 32 threads, Linux 7.0, .NET 10.0.400).
 
 | Target | Executions | Final corpus | Features | Crashes / hangs / OOM |
 |---|---|---|---|---|
