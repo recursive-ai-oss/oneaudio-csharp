@@ -46,6 +46,10 @@ public static class Audio
     public static IAudioDecoder Open(Stream stream, bool leaveOpen = false, AudioLimits? limits = null, CancellationToken cancellationToken = default)
         => Kit.Open(stream, leaveOpen, limits, cancellationToken);
 
+    /// <inheritdoc cref="AudioKit.Open(Stream, AudioLimits, bool, CancellationToken)"/>
+    public static IAudioDecoder Open(Stream stream, AudioLimits limits, bool leaveOpen = false, CancellationToken cancellationToken = default)
+        => Kit.Open(stream, limits, leaveOpen, cancellationToken);
+
     /// <inheritdoc cref="AudioKit.Load(string, LoadOptions?, CancellationToken)"/>
     public static AudioClip Load(string path, LoadOptions? options = null, CancellationToken cancellationToken = default)
         => Kit.Load(path, options, cancellationToken);
@@ -59,6 +63,7 @@ public static class Audio
     /// <summary>
     /// Creates a mixer with the defaults for games: 48 kHz stereo, 64 voices, 8 buses, a lookahead limiter on the master at -1 dB
     /// so summed voices cannot clip. Drive it from your audio device callback with <see cref="AudioMixer.Render"/>.
+    /// The mixer owns only managed memory and starts no threads, so it is not <see cref="IDisposable"/>: drop it when done. Streaming voices own their files; dispose those handles.
     /// </summary>
     /// <param name="sampleRate">Output rate in Hz (default 48000), normally the device's.</param>
     /// <param name="channels">Output channels (default 2).</param>
@@ -145,6 +150,14 @@ public static class Audio
     /// <inheritdoc cref="AudioKit.Measure(Stream, bool, CancellationToken)"/>
     public static LoudnessResult Measure(Stream stream, bool truePeak = true, CancellationToken cancellationToken = default)
         => Kit.Measure(stream, truePeak, cancellationToken);
+
+    /// <inheritdoc cref="AudioKit.Measure(string, AudioLimits, bool, CancellationToken)"/>
+    public static LoudnessResult Measure(string path, AudioLimits limits, bool truePeak = true, CancellationToken cancellationToken = default)
+        => Kit.Measure(path, limits, truePeak, cancellationToken);
+
+    /// <inheritdoc cref="AudioKit.Measure(Stream, AudioLimits, bool, CancellationToken)"/>
+    public static LoudnessResult Measure(Stream stream, AudioLimits limits, bool truePeak = true, CancellationToken cancellationToken = default)
+        => Kit.Measure(stream, limits, truePeak, cancellationToken);
 
     /// <summary>Measures a decoded clip; equals <see cref="LoudnessAnalyzer.Measure(ReadOnlySpan{float}, AudioFormat, bool)"/> over its samples.</summary>
     /// <param name="clip">The clip.</param>
