@@ -5,6 +5,17 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+### Fixed
+
+- Format detection chooses by signature first. `Audio.Open`, `AudioDecoder.Open` and `AudioCodecRegistry.Detect` used to ask formats in registration order, and the MP3 check (which accepts a frame-header-shaped pattern anywhere in the first 512 bytes) ran before MP4 and AMR, so some 3GP and AMR files were opened as MP3 and failed with "No MPEG audio frame found". Formats with a signature at the start of the file (RIFF/WAVE, OggS, fLaC, ISO BMFF boxes, the AMR magic, ADTS with or without an ID3v2 tag) are now asked first; pattern-matching formats are asked afterwards. Registration order only breaks ties within each group. Detection still only returns registered formats.
+- `docs/api.md` and the Devices package readme showed `using var mixer = Audio.CreateMixer();`, but `AudioMixer` holds only managed memory and starts no threads, so it is not `IDisposable` and needs no disposal. The samples no longer use `using`, and the `CreateMixer` documentation says so.
+
+### Added
+
+- `Audio.Open(Stream, AudioLimits, bool leaveOpen = false, CancellationToken = default)` (and the same on `AudioKit`), matching the path form.
+- Stream forms with limits where only a path form existed: `Measure(string/Stream, AudioLimits, bool truePeak = true, CancellationToken = default)` on `Audio` and `AudioKit`, `AudioKit.Play(AudioMixer, Stream, ...)` and `AudioKit.PlayStream(AudioMixer, Stream, ...)` (the streaming voice owns the stream and closes it on dispose).
+- `IContainerFormat.HasWeakSignature` (default interface member, false); `Mp3Format` sets it true.
+
 ## [1.5.1] - 2026-11-01
 
 Two fixes to how the AAC AudioSpecificConfig reports HE-AAC signalling. `RecursiveAI.OneAudio.Devices` changes only its version number.

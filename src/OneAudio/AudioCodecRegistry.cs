@@ -46,12 +46,21 @@ public sealed class AudioCodecRegistry
         throw new UnsupportedAudioFormatException($"No codec registered for '{id}'.");
     }
 
-    /// <summary>Finds the first registered container whose <see cref="IContainerFormat.Matches"/> accepts the bytes, or null.</summary>
+    /// <summary>
+    /// Finds the registered container that recognises the bytes. Formats identified by a signature at the start of the file (RIFF/WAVE,
+    /// OggS, fLaC, an ISO BMFF box, the AMR magic, an ADTS header, with or without an ID3v2 tag in front) are asked first, in registration
+    /// order; formats that only find a frame pattern somewhere in the bytes (see <see cref="IContainerFormat.HasWeakSignature"/>, which
+    /// raw MP3 sets) are asked afterwards, also in registration order. So registration order never lets a pattern match steal a file
+    /// that has a real signature, and only registered formats can be returned.
+    /// </summary>
     /// <param name="head">Leading bytes of a stream.</param>
+    /// <returns>The format, or null when none accepts the bytes.</returns>
     public IContainerFormat? Detect(ReadOnlySpan<byte> head)
     {
         foreach (var c in _containers)
-            if (c.Matches(head)) return c;
+            if (!c.HasWeakSignature && c.Matches(head)) return c;
+        foreach (var c in _containers)
+            if (c.HasWeakSignature && c.Matches(head)) return c;
         return null;
     }
 

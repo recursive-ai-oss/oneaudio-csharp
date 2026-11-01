@@ -179,6 +179,14 @@ public interface IContainerFormat
     bool Matches(ReadOnlySpan<byte> head);
 
     /// <summary>
+    /// True for a format whose <see cref="Matches"/> accepts data by looking for a pattern anywhere in the sniffed bytes rather than
+    /// a fixed signature at the start (raw MPEG audio is the example: any run of bytes can contain something frame-header shaped).
+    /// <see cref="AudioCodecRegistry.Detect"/> tries these only after every format with a start-of-file signature has declined, whatever the
+    /// registration order. False by default.
+    /// </summary>
+    bool HasWeakSignature => false;
+
+    /// <summary>
     /// File name extensions (lowercase, with the leading dot) conventionally used by this format. Used only as a fallback
     /// when <see cref="Matches"/> finds nothing at the start of a file. Empty when the format declares none.
     /// </summary>
