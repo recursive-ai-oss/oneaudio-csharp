@@ -92,7 +92,7 @@ public class AacDecoderTests
         Assert.Equal(2, c.ObjectType);
         Assert.Equal(24000, c.SampleRate);
         Assert.Equal(48000, c.ExtensionSampleRate);
-        Assert.Throws<UnsupportedAudioFormatException>(() => c.CheckSupported());
+        c.CheckSupported(); // explicit SBR is decodable since 1.6.0
     }
 
     private static byte[] Asc(int aot, int rateIndex, int channels)

@@ -13,7 +13,11 @@ mkdir -p "$cache/mp4" "$cache/wav"
 fetched=0 checked=0
 while read -r kind name dvd sha; do
   case "$kind" in ''|'#'*) continue ;; esac
-  if [ "$kind" = mp4 ]; then dir=compressedMp4; ext=mp4; else dir=referencesWav; ext=wav; fi
+  case "$kind" in
+    mp4) dir=compressedMp4; ext=mp4 ;;
+    wavx) dir=referencesWav/add-opt; ext=wav ;;   # extra reference waveforms (SBR and parametric stereo)
+    *) dir=referencesWav; ext=wav ;;
+  esac
   dest="$cache/$ext/$name.$ext"
   if [ -f "$dest" ] && [ "$(sha256sum "$dest" | cut -d' ' -f1)" = "$sha" ]; then checked=$((checked + 1)); continue; fi
   curl -fsSL --retry 3 -o "$dest.part" "$base/$dvd/mpeg4audio-conformance/$dir/$name.$ext"

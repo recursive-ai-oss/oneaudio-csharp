@@ -76,12 +76,12 @@ public class AacFrameProbeTests
         Assert.SkipWhen(n < 0, $"{name} is outside the decoder's scope.");
     }
 
-    // The ISO/IEC 14496-26 streams the decoder handles (the 72 in-scope ones and the implicit-SBR ones, which decode as the AAC-LC core).
+    // The ISO/IEC 14496-26 streams the decoder handles (the in-scope AAC-LC ones and the HE-AAC ones).
     public static TheoryData<string> InScope()
     {
         var d = new TheoryData<string>();
         foreach (var n in AacTestEnv.Names(0)) d.Add(n);
-        foreach (var n in AacTestEnv.Names(2)) d.Add(n);
+        foreach (var n in AacTestEnv.Names(3)) d.Add(n);
         return d;
     }
 
