@@ -49,6 +49,12 @@ internal static class ContainerSmoke
             if (d.Format.SampleRate != 44100 || d.Format.Channels != 1 || total != 5 * 1024) return Fail("aac decode length " + total);
         }
 
+        // Frame-length probe: the silent mono unit is 4 bytes; a cut-off one is incomplete; garbage is not AAC.
+        var probe = new AacFrameProbe(new byte[] { 0x12, 0x08 });
+        if (probe.Probe(new byte[] { 0x00, 0x00, 0x00, 0x07, 0x55 }, out int unitLength) != AacProbeResult.Frame || unitLength != 4) return Fail("aac probe length");
+        if (probe.Probe(new byte[] { 0x00, 0x00 }, out _) != AacProbeResult.Incomplete) return Fail("aac probe incomplete");
+        if (probe.Probe(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF }, out _) == AacProbeResult.Frame) return Fail("aac probe garbage");
+
         // 3GP with an AMR-NB track of 12 frames in two chunks.
         byte[] threeGp = BuildThreeGp();
         using (var s = Mp4PacketSource.Open(new MemoryStream(threeGp)))

@@ -555,6 +555,10 @@ public sealed class Mp4PacketSource : IPacketSource
         if (AllDurationsZero(stts) && sampleCount > 0)
         {
             long frameSamples = t.Codec == CodecId.Aac ? 1024 : t.Codec == CodecId.AmrWb ? 320 : t.Codec == CodecId.AmrNb ? 160 : 0;
+            // A 3GP AMR sample may hold several frames; damr's last byte (3GPP TS 26.244 8.3) is the frame count per sample.
+            // Trust it only as a duration hint here: the decoder walks the table-of-contents bytes itself.
+            if ((t.Codec == CodecId.AmrNb || t.Codec == CodecId.AmrWb) && t.CodecConfig.Length >= 9)
+                frameSamples *= Math.Clamp((int)t.CodecConfig.Span[8], 1, 255);
             long delta = frameSamples == 0 ? 0 : Math.Max(1, frameSamples * t.MediaTimeScale / t.SampleRate);
             stts = delta == 0 ? stts : [(uint)sampleCount, (uint)delta];
         }

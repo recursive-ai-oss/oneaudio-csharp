@@ -441,6 +441,8 @@ public sealed class OpusStreamDecoder : IAudioDecoder
                 end = (int)Math.Max(0, n - (g1 - p.EndFrame));
                 g1 = p.EndFrame;
             }
+            // PacketView.DiscardEndFrames: a container-declared trim of this packet's tail (the granule clock still advances by n).
+            end = (int)Math.Max(0, end - (long)p.DiscardEndFrames);
             _granule = g1;
             long keepFrom = Math.Clamp(Math.Max(_head.PreSkip, _discardUntil) - g0, 0, n);
             if (keepFrom >= end) continue;

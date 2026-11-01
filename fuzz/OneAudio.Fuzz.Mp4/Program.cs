@@ -44,6 +44,22 @@ static void Target(byte[] input)
         }
     }
     catch (OneAudioException) { } // expected rejection of bad input; anything else is a finding
+    if (forward) return;
+    // The same bytes through the AAC and AMR decoders (several AMR frames per sample, seeks into them).
+    try
+    {
+        using var dec = AudioDecoder.Open(new MemoryStream(data), Env.Registry, limits);
+        var pcm = new float[1600 * dec.Format.Channels];
+        for (int i = 0; i < 40 && dec.Read(pcm) > 0; i++) { }
+        if (dec.CanSeek && dec.LengthFrames > 0)
+        {
+            dec.Seek(dec.LengthFrames / 2);
+            dec.Read(pcm);
+            dec.Seek(0);
+            dec.Read(pcm);
+        }
+    }
+    catch (OneAudioException) { }
 }
 
 if (args.Length == 0)
@@ -71,4 +87,9 @@ sealed class ForwardOnly(byte[] data) : Stream
     public override void SetLength(long value) => throw new NotSupportedException();
     public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     protected override void Dispose(bool disposing) { if (disposing) _ms.Dispose(); base.Dispose(disposing); }
+}
+
+static class Env
+{
+    public static readonly AudioCodecRegistry Registry = new AudioCodecRegistry().AddMp4().AddAac().AddAmr();
 }
