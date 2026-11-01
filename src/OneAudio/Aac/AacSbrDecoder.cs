@@ -27,7 +27,6 @@ internal sealed class SbrDecoder
     private readonly bool[] _needFreq = new bool[2];
     private readonly AacPs? _ps;
 
-    private int _au;
     private bool _active;        // a header has been received and its tables built
     private bool _pair;
     private bool _frameOk;
@@ -80,27 +79,12 @@ internal sealed class SbrDecoder
 
     // --- payload -------------------------------------------------------------------------------------------------------
 
-    // (experiment)
-    private readonly byte[] _dBuf = new byte[272]; private int _dBits; private bool _dCrc, _dPair, _dHave;
-    private static readonly bool Delay = Environment.GetEnvironmentVariable("DELAY") is not null;
     /// <summary>
     /// Supplies the SBR payload of the next access unit (the bits after the extension type nibble of the fill element).
     /// <paramref name="bits"/> is its length in bits. <paramref name="crc"/> marks extension type 0xE, which starts with
     /// a 10-bit CRC that is skipped, not checked.
     /// </summary>
     public void SetPayload(ReadOnlySpan<byte> data, int bits, bool crc, bool pairElement)
-    {
-        if (Delay)
-        {
-            bool had = _dHave; int b0 = _dBits; bool c0 = _dCrc, p0 = _dPair; var tmp = _dBuf.AsSpan(0, (b0 + 7) / 8).ToArray();
-            data.Slice(0, (bits + 7) / 8).CopyTo(_dBuf); _dBits = bits; _dCrc = crc; _dPair = pairElement; _dHave = true;
-            if (!had) { _frameOk = false; return; }
-            SetPayloadCore(tmp, b0, c0, p0);
-            return;
-        }
-        SetPayloadCore(data, bits, crc, pairElement);
-    }
-    private void SetPayloadCore(ReadOnlySpan<byte> data, int bits, bool crc, bool pairElement)
     {
         _pair = pairElement;
         _frameOk = false;
@@ -112,14 +96,13 @@ internal sealed class SbrDecoder
             return;
         }
         bool ok = true;
-        if (Environment.GetEnvironmentVariable("DBG2") is not null) Console.Error.WriteLine($"payload bits={bits} first={data[0]:x2}{data[1]:x2}{data[2]:x2}{data[3]:x2} crc={crc} pair={pairElement}");
         if (br.ReadBit())
         {
             ok = ReadHeaderAndBuild(ref br);
         }
         else if (!_active)
         {
-            ok = false; AacSbrSyntax.Why = "noheader";
+            ok = false;
         }
         if (ok && _active)
         {
@@ -130,11 +113,9 @@ internal sealed class SbrDecoder
                 ok = AacSbrSyntax.ReadSingle(ref br, _bands, _hdr, _frame[0], _ps, NumTimeSlots);
                 if (_ps is not null && _ps.DataAvailable) PsSeen = true;
             }
-            if (ok && br.Position > bits) { ok = false; AacSbrSyntax.Why = "overread"; }
+            if (ok && br.Position > bits) ok = false;
         }
         _frameOk = ok && _active;
-        if (!ok && Environment.GetEnvironmentVariable("DBG3") is not null) Console.Error.WriteLine($"PARSEFAIL {AacSbrSyntax.Why} pos={br.Position} bits={bits}");
-        if (Environment.GetEnvironmentVariable("DBG") is not null) { _au++; if (_pair) { var g = _frame[1]; Console.Error.WriteLine($"   R: cls={g.FrameClass} nenv={g.NEnvelopes} borders={string.Join(',', g.Borders.Take(g.NEnvelopes+1))} fr={string.Join(',', g.FreqRes.Take(g.NEnvelopes))} dom={g.DomainVec[0]},{g.DomainVec[1]} cpl={g.Coupling} amp={g.AmpResCurrent} nsf={g.NScaleFactors}"); } var f = _frame[0]; Console.Error.WriteLine($"au{_au} ok={ok} cls={f.FrameClass} nenv={f.NEnvelopes} borders={string.Join(',', f.Borders.Take(f.NEnvelopes+1))} tran={f.TranEnv} freqres={string.Join(',', f.FreqRes.Take(f.NEnvelopes))} dom={f.DomainVec[0]} hdr: s{_hdr.StartFreq} e{_hdr.StopFreq} x{_hdr.XoverBand} fs{_hdr.FreqScale} as{_hdr.AlterScale} nb{_hdr.NoiseBands} lb{_hdr.LimiterBands} lg{_hdr.LimiterGains} if{_hdr.InterpolFreq} sm{_hdr.SmoothingLength} ar{_hdr.AmpResolution} dn={f.DomainVecNoise[0]},{f.DomainVecNoise[1]} nn={f.NNoiseEnvelopes} invf={string.Join(',', f.InvfMode.Take(_bands.NNoise))} ah={string.Join("",f.AddHarmonics.Take(_bands.NSfb[1]))} env={string.Join(',',f.Envelope.Take(Math.Min(f.NScaleFactors,12)))} nf={string.Join(',',f.NoiseFloor.Take(_bands.NNoise*f.NNoiseEnvelopes))} lo={_bands.LowSubband} hi={_bands.HighSubband} np={_bands.NPatches}"); }
     }
 
     /// <summary>Marks the access unit as having no SBR payload (a lost packet, or a stream whose payload is absent here).</summary>
@@ -171,7 +152,7 @@ internal sealed class SbrDecoder
             }
             _active = true;
         }
-        else if (limiter && Environment.GetEnvironmentVariable("NOLIM") is null)
+        else if (limiter)
         {
             if (!_bands.ResetLimiter(_hdr.LimiterBands)) { _active = false; return false; }
         }
@@ -271,7 +252,6 @@ internal sealed class SbrDecoder
                 bad = true;
             }
         }
-        if (bad && Environment.GetEnvironmentVariable("DBG3") is not null) Console.Error.WriteLine($"BAD frameOk={_frameOk} needFreq={_needFreq[0]} dom={_frame[0].DomainVec[0]} b0={_frame[0].Borders[0]} stop={_prev[0].StopPos}");
         if (bad)
         {
             for (int c = 0; c < channels; c++)

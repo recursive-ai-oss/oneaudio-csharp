@@ -48,8 +48,6 @@ internal sealed class SbrPrev
 /// <summary>Reads the SBR payload syntax. Every count read from the stream is checked against the table sizes before use.</summary>
 internal static class AacSbrSyntax
 {
-    public static string Why = "";
-    private static bool F(string w) { Why = w; return false; }
     private const int FixFix = 0, FixVar = 1, VarFix = 2, VarVar = 3;
 
     private static int Huff(ReadOnlySpan<sbyte> tree, ref AacBitReader br)
@@ -110,7 +108,7 @@ internal static class AacSbrSyntax
                 temp = (int)br.Read(2);
                 bool staticFreqRes = br.ReadBit();
                 nEnv = 1 << temp;
-                if (nEnv > SbrFrame.MaxEnvelopes) return F("fixfix nenv");
+                if (nEnv > SbrFrame.MaxEnvelopes) return false;
                 // evenly spaced borders; noise floor envelopes split at the middle border
                 for (i = 0; i <= nEnv; i++) f.Borders[i] = numTimeSlots * i / nEnv;
                 for (i = 0; i < nEnv; i++) f.FreqRes[i] = staticFreqRes ? 1 : 0;
@@ -143,7 +141,7 @@ internal static class AacSbrSyntax
                     f.Borders[--i] = border;
                 }
                 p = (int)br.Read(PointerBits(n + 2));
-                if (p > n + 1) return F("ptr");
+                if (p > n + 1) return false;
                 f.TranEnv = p != 0 ? n + 2 - p : -1;
                 for (int k = n; k >= 0; k--) f.FreqRes[k] = (int)br.Read(1);
                 f.BordersNoise[1] = (p == 0 || p == 1) ? f.Borders[n] : f.Borders[f.TranEnv];
@@ -160,7 +158,7 @@ internal static class AacSbrSyntax
                 }
                 f.Borders[kk] = numTimeSlots;
                 p = (int)br.Read(PointerBits(n + 2));
-                if (p > n + 1) return F("ptr");
+                if (p > n + 1) return false;
                 f.TranEnv = (p == 0 || p == 1) ? -1 : p - 1;
                 for (int k = 0; k <= n; k++) f.FreqRes[k] = (int)br.Read(1);
                 f.BordersNoise[1] = p switch { 0 => f.Borders[1], 1 => f.Borders[n], _ => f.Borders[f.TranEnv] };
@@ -193,7 +191,7 @@ internal static class AacSbrSyntax
                     f.Borders[--i] = border;
                 }
                 p = (int)br.Read(PointerBits(nL + nR + 2));
-                if (p > nL + nR + 1) return F("ptr2");
+                if (p > nL + nR + 1) return false;
                 f.TranEnv = p != 0 ? b - p : -1;
                 for (int k = 0; k < nEnv; k++) f.FreqRes[k] = (int)br.Read(1);
                 f.BordersNoise[0] = aL;
@@ -213,7 +211,7 @@ internal static class AacSbrSyntax
             f.BordersNoise[0] = f.Borders[0];
             f.BordersNoise[f.NNoiseEnvelopes] = f.Borders[nEnv];
         }
-        if (br.Overrun) return F("grid overrun"); return CheckGrid(f, numTimeSlots) || F("checkgrid");
+        if (br.Overrun) return false; return CheckGrid(f, numTimeSlots);
     }
 
     // number of bits for the transient pointer: ceil(log2(n + 2)) where the argument is n + 2
@@ -266,7 +264,7 @@ internal static class AacSbrSyntax
             noBand[i] = bands.NSfb[f.FreqRes[i]];
             f.NScaleFactors += noBand[i];
         }
-        if (f.NScaleFactors > SbrFrame.MaxEnvelopeValues) return F("nscale");
+        if (f.NScaleFactors > SbrFrame.MaxEnvelopeValues) return false;
         ReadOnlySpan<sbyte> hcbT, hcbF;
         int comp;
         if (coupling == 2)
@@ -295,7 +293,7 @@ internal static class AacSbrSyntax
                 f.Envelope[offset + i] = delta << comp;
             }
             offset += noBand[j];
-            if (br.Overrun) return F("env overrun");
+            if (br.Overrun) return false;
         }
         return true;
     }
@@ -339,10 +337,10 @@ internal static class AacSbrSyntax
         if (!ReadGrid(ref br, f, numTimeSlots)) return false;
         ReadDirections(ref br, f);
         for (int i = 0; i < bands.NNoise; i++) f.InvfMode[i] = (int)br.Read(2);
-        if (!ReadEnvelope(ref br, bands, h, f) || br.Overrun) return F("envelope");
+        if (!ReadEnvelope(ref br, bands, h, f) || br.Overrun) return false;
         ReadNoise(ref br, bands, f);
         ReadSinusoidal(ref br, bands, f);
-        return (ReadExtension(ref br, ps) && !br.Overrun) || F("ext");
+        return ReadExtension(ref br, ps) && !br.Overrun;
     }
 
     /// <summary>4.5.2.8.2 sbr_channel_pair_element (without the leading header flag).</summary>

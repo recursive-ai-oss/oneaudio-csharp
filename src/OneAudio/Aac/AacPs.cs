@@ -188,7 +188,6 @@ internal sealed class AacPs
             }
             _enableExt = br.ReadBit();
         }
-        if (Environment.GetEnvironmentVariable("DBG4") is not null) Console.Error.WriteLine($"PS header={header} iid={_enableIid}/{_modeIid}/{_fineIid} icc={_enableIcc}/{_modeIcc} ext={_enableExt} bitsLeft={bitsLeft}");
         if (!_haveHeader) return Skip(ref br, start, bitsLeft);
 
         _frameClass = br.ReadBit() ? 1 : 0;
@@ -270,7 +269,7 @@ internal sealed class AacPs
             for (int i = count * stride - 1; i > 0; i--) index[i] = index[i / stride];
     }
 
-    // the 34 band layout is folded onto the 20 band layout of the processing (8.6.4.6.3, mapping of table 8.A.?)
+    // the 34 band layout is folded onto the 20 band layout of the processing (the 34 to 20 band mapping of ISO/IEC 14496-3 8.6.4.6.3)
     private static void Map34To20(int[] a)
     {
         a[0] = (2 * a[0] + a[1]) / 3;
