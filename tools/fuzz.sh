@@ -98,7 +98,7 @@ seed() {
                  done ;;
     aac)         # Real AAC files turned into the target's input format (config bytes, then length-prefixed access units).
                  for ext in '*.m4a' '*.mp4' '*.aac'; do
-                   find "$here/testdata" ${ONEAUDIO_CORPUS:+"$ONEAUDIO_CORPUS/aac-iso-lc/mp4"} -type f -iname "$ext" -size -2048k 2>/dev/null | head -n 120 | while read -r f; do
+                   { find "$here/testdata" ${ONEAUDIO_CORPUS:+"$ONEAUDIO_CORPUS/aac-iso-lc/mp4"} -type f -iname "$ext" -size -2048k 2>/dev/null || true; } | head -n 120 | while read -r f; do
                      dotnet "$work/bin-plain/OneAudio.Fuzz.Aac.dll" --seed "$f" "$corpus/$(basename "${f%.*}").seed" 2>/dev/null || true
                    done
                  done
