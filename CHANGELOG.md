@@ -5,6 +5,19 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+### Added
+
+- `AacFrameProbe` and `AacProbeResult`: finds the byte length of the AAC raw_data_block at the start of some bytes by parsing its syntax up to the end element (no transform), for demuxers that must frame unframed AAC. Distinguishes a complete block, a block cut short (`Incomplete`) and bytes that are not AAC; it never throws on bad data and allocates nothing after construction.
+- `PacketView.DiscardEndFrames` (and a `PacketView` constructor that sets it): output frames to drop from the end of one packet's decoded audio, for containers whose padding trim can fall on any packet. Honoured by the AAC, Opus, Vorbis, FLAC (Ogg) and AMR decoders; 0 by default, so existing packet sources behave as before.
+
+### Fixed
+
+- AMR and AMR-WB in 3GP: a sample holding several storage-format frames (3GPP TS 26.244 allows it; `damr` records the frames per sample) failed with "frame type 7 needs 31 payload bytes". The decoder now walks the table-of-contents bytes of each sample, decodes every frame and requires them to fill the sample exactly; a sample that does not gives a typed `AudioFormatException`. The time-to-sample fallback for files without durations also uses `damr`'s frames per sample.
+
+### Changed
+
+- The README says the MP4/3GP reader covers what the AAC and AMR decoders need and is maintained for bug fixes only.
+
 ## [1.4.0] - 2026-10-29
 
 AAC-LC and AMR/AMR-WB decoding, with MP4/M4A/3GP, ADTS and AMR file containers. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.

@@ -362,6 +362,8 @@ public sealed class VorbisDecoder : IAudioDecoder
                 front += skip;
                 _skipFrames -= skip;
             }
+            // PacketView.DiscardEndFrames: a container-declared trim of this packet's tail, after the priming skip above.
+            outLen = (int)Math.Max(0, outLen - (long)p.DiscardEndFrames);
             if (outLen - front <= 0) continue;
             _outPos = front;
             _outLen = outLen;

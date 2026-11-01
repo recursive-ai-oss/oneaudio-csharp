@@ -18,6 +18,14 @@ internal sealed class AmrStreamDecoder : IAudioDecoder
     private readonly IAmrFrameDecoder _decoder;
     private readonly int _frameSize;
     private readonly short[] _pcm;
+    private readonly bool _wide;
+    // The packet being decoded, kept so a 3GP sample holding several frames is decoded one frame per refill.
+    private byte[] _packet = [];
+    private int _packetLen;
+    private int _packetPos;
+    private int _packetFrames;    // frames in the packet, set when it is loaded
+    private int _frameInPacket;
+    private int _packetDiscard;   // PacketView.DiscardEndFrames
     private int _bufPos;
     private int _bufCount;
     private long _position;
@@ -28,6 +36,7 @@ internal sealed class AmrStreamDecoder : IAudioDecoder
         _packets = packets;
         _decoder = decoder;
         _frameSize = decoder.SamplesPerFrame;
+        _wide = sampleRate == 16000;
         _pcm = new short[_frameSize];
         Format = new AudioFormat(sampleRate, 1, ChannelMask.FrontCenter);
     }
@@ -42,15 +51,58 @@ internal sealed class AmrStreamDecoder : IAudioDecoder
 
     public bool HasNativeIntegers => false;
 
+    // 3GPP TS 26.244 8.3: a 3GP sample holds one or more storage-format frames (TOC byte + speech bytes), the count being
+    // damr's frames-per-sample. Walk the TOC bytes instead of trusting that field, and require them to fill the sample exactly.
+    // A packet whose first frame is unknown goes to the frame decoder whole, which reports the damaged frame.
+    private int NextFrameLength()
+    {
+        int rest = _packetLen - _packetPos;
+        if (_packetPos == 0)
+        {
+            int total = 0, frames = 0;
+            while (total < _packetLen)
+            {
+                int payload = AmrFrameTable.PayloadBytes(_wide, AmrFrameTable.FrameType(_packet[total]));
+                if (payload < 0 || total + 1 + payload > _packetLen)
+                {
+                    if (total == 0) { _packetFrames = 1; return rest; }
+                    throw new AudioFormatException("The frames of an AMR sample do not fill the sample exactly.");
+                }
+                total += 1 + payload;
+                frames++;
+            }
+            _packetFrames = frames;
+        }
+        return Math.Min(rest, 1 + Math.Max(0, AmrFrameTable.PayloadBytes(_wide, AmrFrameTable.FrameType(_packet[_packetPos]))));
+    }
+
     private bool DecodeNext()
     {
         while (true)
         {
-            if (!_packets.TryReadPacket(out PacketView packet)) return false;
-            if (packet.IsHeader) continue;
-            _decoder.Decode(packet.Data, _pcm);
+            if (_packetPos >= _packetLen)
+            {
+                if (!_packets.TryReadPacket(out PacketView packet)) return false;
+                if (packet.IsHeader) continue;
+                if (packet.Data.IsEmpty) throw new AudioFormatException("Empty AMR frame.");
+                if (_packet.Length < packet.Data.Length) _packet = new byte[packet.Data.Length]; // bounded by the source's packet limit
+                packet.Data.CopyTo(_packet);
+                _packetLen = packet.Data.Length;
+                _packetPos = 0;
+                _frameInPacket = 0;
+                _packetDiscard = packet.DiscardEndFrames;
+            }
+            int len = NextFrameLength();
+            _decoder.Decode(_packet.AsSpan(_packetPos, len), _pcm);
+            _packetPos += len;
+            // PacketView.DiscardEndFrames trims the end of the packet's audio, which may cover several whole frames; they are still
+            // decoded so the codec state stays in step.
+            long tail = (long)(_packetFrames - 1 - _frameInPacket) * _frameSize;
+            _frameInPacket++;
+            long keep = Math.Clamp(_frameSize - Math.Max(0, _packetDiscard - tail), 0, _frameSize);
+            if (keep == 0) continue;
             _bufPos = 0;
-            _bufCount = _frameSize;
+            _bufCount = (int)keep;
             return true;
         }
     }
@@ -87,6 +139,8 @@ internal sealed class AmrStreamDecoder : IAudioDecoder
         _packets.SeekToFrame((frameIndex - pre) * _frameSize, out long start);
         _decoder.Reset();
         _bufPos = _bufCount = 0;
+        _packetPos = _packetLen = 0;
+        _frameInPacket = 0;
         long discard = frame - start;
         if (discard < 0) throw new AudioFormatException("The container positioned after the requested frame.");
         while (discard > 0)

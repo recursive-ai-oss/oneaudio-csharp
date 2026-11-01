@@ -77,6 +77,9 @@ public sealed class FlacDecoder : IAudioDecoder
     private long _blockStart;
     private int _blockLen;
     private int _blockPos;
+    // PacketView.DiscardEndFrames of the current block: its last frames are decoded but not delivered. The block still spans
+    // _blockLen frames on the timeline, so the next block starts where the container's frame numbering says.
+    private int _blockDiscard;
     private bool _ended;
     private bool _positionFromHeader;
     private bool _disposed;
@@ -466,10 +469,11 @@ public sealed class FlacDecoder : IAudioDecoder
         _blockStart = start;
         _blockLen = 0;
         _blockPos = 0;
+        _blockDiscard = 0;
         if (_ended) return false;
 
         FlacFrameHeader h = default;
-        int used = 0;
+        int used = 0, discard = 0;
         if (_packets is not null)
         {
             while (true)
@@ -485,6 +489,7 @@ public sealed class FlacDecoder : IAudioDecoder
                 if (!_positionFromHeader && _si.TotalSamples > 0 && start - _linkBase >= _si.TotalSamples) { _ended = true; return false; }
                 if (_fd.Decode(pkt.Data, out h, out used) == FlacFrameStatus.NeedMore)
                     throw new AudioFormatException("Truncated FLAC frame.");
+                discard = pkt.DiscardEndFrames;
                 break;
             }
         }
@@ -510,6 +515,7 @@ public sealed class FlacDecoder : IAudioDecoder
         // RFC 9639 section 8.2: only the last frame may be shorter than the minimum block size.
         if (n < _si.MinBlockSize && total > 0 && rel + n < total) throw new AudioFormatException("FLAC frame is shorter than the STREAMINFO minimum block size.");
         _blockLen = n;
+        _blockDiscard = Math.Min(discard, n);
         return true;
     }
 
@@ -542,8 +548,8 @@ public sealed class FlacDecoder : IAudioDecoder
         float scale = _scale;
         while (done < frames)
         {
-            if (_blockPos >= _blockLen && !NextFrame()) break;
-            int take = Math.Min(frames - done, _blockLen - _blockPos);
+            if (_blockPos >= _blockLen - _blockDiscard && !NextFrame()) break;
+            int take = Math.Min(frames - done, _blockLen - _blockDiscard - _blockPos);
             var dst = destination.Slice(done * ch, take * ch);
             int from = _blockPos;
             var chans = _fd.Channels;
@@ -586,8 +592,8 @@ public sealed class FlacDecoder : IAudioDecoder
         int shift = _shift;
         while (done < frames)
         {
-            if (_blockPos >= _blockLen && !NextFrame()) break;
-            int take = Math.Min(frames - done, _blockLen - _blockPos);
+            if (_blockPos >= _blockLen - _blockDiscard && !NextFrame()) break;
+            int take = Math.Min(frames - done, _blockLen - _blockDiscard - _blockPos);
             var dst = destination.Slice(done * ch, take * ch);
             int from = _blockPos;
             var chans = _fd.Channels;
@@ -762,6 +768,7 @@ public sealed class FlacDecoder : IAudioDecoder
             {
                 _blockStart = fSample;
                 _blockLen = fLen;
+                _blockDiscard = 0;
                 _blockPos = (int)(frame - fSample);
                 return false;
             }

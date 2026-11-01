@@ -9,7 +9,7 @@ namespace OneAudio.Tests;
 /// by ffmpeg (a black box, tests only) decodes through <c>Audio.Open</c> to exactly the reference output. Files with
 /// random payloads (testdata/containers) only prove framing and are not used here.
 /// </summary>
-public class AmrFileTests
+public partial class AmrFileTests
 {
     private static readonly string[] NbSequences =
     [
@@ -102,7 +102,7 @@ public class AmrFileTests
         Assert.True(bad == 0, $"{relative}: {bad} of {got.Length} samples differ from the reference output");
     }
 
-    private static string TempDir()
+    internal static string TempDir()
     {
         string d = Path.Combine(Path.GetTempPath(), "amrfile-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(d);

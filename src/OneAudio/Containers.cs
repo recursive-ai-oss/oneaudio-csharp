@@ -45,6 +45,21 @@ public readonly ref struct PacketView(ReadOnlySpan<byte> Data, long EndFrame, bo
         Duration = duration;
     }
 
+    /// <summary>Creates a packet that also tells the codec to drop frames from the end of its decoded audio.</summary>
+    /// <param name="data">The packet bytes.</param>
+    /// <param name="endFrame">End position in output frames, or -1 when unknown.</param>
+    /// <param name="isHeader">True for header packets.</param>
+    /// <param name="timestamp">Decode time of the first sample, in units of <see cref="IPacketSource.TimeScale"/>.</param>
+    /// <param name="duration">Duration in the same units; 0 when unknown.</param>
+    /// <param name="discardEndFrames">Output frames to drop from the end of this packet's decoded audio; see <see cref="DiscardEndFrames"/>.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="discardEndFrames"/> is negative.</exception>
+    public PacketView(ReadOnlySpan<byte> data, long endFrame, bool isHeader, long timestamp, long duration, int discardEndFrames)
+        : this(data, endFrame, isHeader, timestamp, duration)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(discardEndFrames);
+        DiscardEndFrames = discardEndFrames;
+    }
+
     /// <summary>The packet bytes.</summary>
     public ReadOnlySpan<byte> Data { get; } = Data;
     /// <summary>End position in output frames, or -1 when unknown.</summary>
@@ -58,6 +73,19 @@ public readonly ref struct PacketView(ReadOnlySpan<byte> Data, long EndFrame, bo
     public long Timestamp { get; }
     /// <summary>Duration in <see cref="IPacketSource.TimeScale"/> units, or 0 when unknown.</summary>
     public long Duration { get; }
+    /// <summary>
+    /// Output frames, at the codec's output rate, to drop from the <b>end</b> of this packet's decoded audio; 0 (the default) keeps
+    /// everything. A container sets it on any packet (Matroska's DiscardPadding can trim a packet in the middle of a stream), where
+    /// <see cref="EndFrame"/> can only describe where the last packet ends. The codec decodes the whole packet, so its internal
+    /// state and the overlap with the next packet are unaffected, and delivers that many frames fewer.
+    /// <para>It stacks with the other trims instead of replacing them: a codec first applies <see cref="EndFrame"/> (where it uses it)
+    /// and the start-of-stream priming (<see cref="IPacketSource.PrimingFrames"/>), then drops this count from what is left of the
+    /// packet, never below empty. A source that already expresses a packet's end through <see cref="EndFrame"/> should not also
+    /// set this for the same frames. <c>LengthFrames</c> and seek positions stay on the container's timeline, which still contains the
+    /// dropped frames; <c>PositionFrames</c> counts frames delivered, so it runs behind the timeline after a discard until the next seek. The AAC
+    /// decoder counts dropped frames toward its length cap, so the declared end falls where the container says.</para>
+    /// </summary>
+    public int DiscardEndFrames { get; }
 }
 
 /// <summary>

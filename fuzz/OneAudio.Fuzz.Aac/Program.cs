@@ -44,6 +44,20 @@ static void Target(byte[] input)
     }
     try
     {
+        // The frame-length probe on every unit and on the bytes after the first: it never throws, and a length stays inside the data.
+        if (AacAudioConfig.TryParse(config, out var parsed) && parsed is not null)
+        {
+            AacFrameProbe? probe = null;
+            try { probe = new AacFrameProbe(parsed); } catch (OneAudioException) { }
+            if (probe is not null)
+                foreach (var u in units)
+                {
+                    var r = probe.Probe(u, out int length);
+                    if (r == AacProbeResult.Frame && (length < 1 || length > u.Length)) throw new InvalidOperationException("probe length outside the unit");
+                    if (r != AacProbeResult.Frame && length != 0) throw new InvalidOperationException("probe length set without a frame");
+                    if (u.Length > 1) probe.Probe(u.AsSpan(1), out _);
+                }
+        }
         using var dec = new AacDecoder(new UnitSource(units, config)) { ConcealErrors = conceal };
         var pcm = new float[1500 * dec.Format.Channels];
         for (int i = 0; i < 200; i++)
@@ -89,7 +103,8 @@ sealed class UnitSource(List<byte[]> units, byte[] config) : IPacketSource
     public bool TryReadPacket(out PacketView packet)
     {
         if (_next >= units.Count) { packet = default; return false; }
-        packet = new PacketView(units[_next++], -1, false);
+        int i = _next++;
+        packet = new PacketView(units[i], -1, false, 0, 0, i % 5 == 3 ? 300 : 0);
         return true;
     }
     public void SeekToFrame(long frame, out long startFrame)

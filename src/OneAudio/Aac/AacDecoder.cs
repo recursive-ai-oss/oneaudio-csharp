@@ -45,6 +45,8 @@ public sealed class AacDecoder : IAudioDecoder
     private int _bufCount;
     private long _skip;               // decoded frames still to drop
     private long _pos;
+    private long _dropped;            // frames removed so far by PacketView.DiscardEndFrames; the length cap counts them as played
+    private int _tail;                // frames the current packet is dropping from its end
     private long _frameIndex;         // index of the next packet's access unit, counted from the start of the media
     private bool _disposed;
 
@@ -127,14 +129,16 @@ public sealed class AacDecoder : IAudioDecoder
         int got = 0;
         while (got < want)
         {
-            if (_length >= 0 && _pos >= _length) break;
+            if (_length >= 0 && _pos + _dropped >= _length) break;
             if (_bufPos >= _bufCount)
             {
+                _dropped += _tail;
+                _tail = 0;
                 if (!Fill()) break;
                 continue;
             }
             int n = Math.Min(want - got, _bufCount - _bufPos);
-            if (_length >= 0) n = (int)Math.Min(n, _length - _pos);
+            if (_length >= 0) n = (int)Math.Min(n, _length - _pos - _dropped);
             _buf.AsSpan(_bufPos * _channels, n * _channels).CopyTo(destination.Slice(got * _channels));
             _bufPos += n;
             got += n;
@@ -167,7 +171,9 @@ public sealed class AacDecoder : IAudioDecoder
         long drop = Math.Min(_skip, Frame);
         _skip -= drop;
         _bufPos = (int)drop;
-        _bufCount = Frame;
+        // PacketView.DiscardEndFrames: the tail of this packet's output is not delivered (never below the priming already dropped).
+        _bufCount = (int)Math.Max(drop, Frame - (long)packet.DiscardEndFrames);
+        _tail = Frame - _bufCount;
         return true;
     }
 
@@ -194,6 +200,8 @@ public sealed class AacDecoder : IAudioDecoder
         _skip = Math.Max(0, frame - start);
         if (_length >= 0 && frame >= _length) _skip = 0;
         _bufPos = _bufCount = 0;
+        _dropped = 0;
+        _tail = 0;
         _pos = frame;
     }
 

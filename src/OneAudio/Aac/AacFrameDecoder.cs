@@ -33,6 +33,8 @@ internal sealed partial class AacFrameDecoder
     private readonly bool[] _correlated = new bool[AacChannelState.MaxBands];
     private readonly uint[] _noiseSeed = new uint[AacChannelState.MaxBands * 8];
     private uint _noiseState;
+    private bool _parseOnly;
+    private bool _ranOut;
 
     /// <summary>True once any frame carried an SBR fill extension (HE-AAC data riding on the core stream), which is skipped.</summary>
     internal bool SbrDataSeen { get; private set; }
@@ -95,36 +97,108 @@ internal sealed partial class AacFrameDecoder
     {
         _noiseState = (uint)frameIndex * 2654435761u + 0x9E3779B9u;
         var br = new AacBitReader(unit);
+        if (!ParseUnit(ref br)) throw TakeError();
+        for (int c = 0; c < _channels; c++)
+        {
+            Synthesize(_ch[c]);
+            var t = _ch[c].Time;
+            for (int i = 0; i < FrameSize; i++) pcm[i * _channels + c] = t[i];
+        }
+    }
+
+    /// <summary>
+    /// Parses one access unit up to and including its end element, without dequantizing or transforming, and reports how many bytes
+    /// it occupies (the end element is followed by padding to a byte boundary, 14496-3 4.4.2.1). The instance must not also be used
+    /// to decode: parsing overwrites the per-channel spectra.
+    /// </summary>
+    /// <param name="data">Bytes that start at the unit; may be longer than the unit.</param>
+    /// <param name="length">The unit's byte length when the result is <see cref="AacProbeResult.Frame"/>.</param>
+    internal AacProbeResult Probe(ReadOnlySpan<byte> data, out int length)
+    {
+        length = 0;
+        var br = new AacBitReader(data);
+        _parseOnly = true;
+        _ranOut = false;
+        bool ok = ParseUnit(ref br);
+        _parseOnly = false;
+        // Bad data is reported through return values, not exceptions, so probing garbage allocates nothing. Running off the end of
+        // the data means the unit may simply be cut short; a bad field before the end means these bytes are not a unit of this stream.
+        if (!ok || br.Overrun) return br.Overrun || _ranOut ? AacProbeResult.Incomplete : AacProbeResult.NotAac;
+        length = (br.Position + 7) >> 3;
+        return AacProbeResult.Frame;
+    }
+
+    // Parse failures are recorded here rather than thrown from the middle of the syntax, so the probe can run them without
+    // allocating; Decode turns the record into the same exception as before.
+    private string? _failMessage;
+    private bool _failUnsupported;
+
+    private bool Fail(string message)
+    {
+        _failMessage = message;
+        _failUnsupported = false;
+        return false;
+    }
+
+    private bool FailUnsupported(string message)
+    {
+        _failMessage = message;
+        _failUnsupported = true;
+        return false;
+    }
+
+    private Exception TakeError() =>
+        _failUnsupported ? new UnsupportedAudioFormatException(_failMessage!) : new AudioFormatException(_failMessage ?? "An AAC access unit is malformed.");
+
+    private bool Truncated(in AacBitReader br)
+    {
+        if (!br.Overrun) return false;
+        Fail("An AAC access unit is truncated.");
+        return true;
+    }
+
+    // Reads the elements of one access unit into the channel states, up to the end element. False records the reason in the fail fields.
+    private bool ParseUnit(ref AacBitReader br)
+    {
         int done = 0;
         bool end = false;
         Array.Clear(_filled);
         while (!end)
         {
-            if (br.BitsLeft < 3) throw new AudioFormatException("An AAC access unit ends before its end element.");
+            if (br.BitsLeft < 3)
+            {
+                _ranOut = true;
+                return Fail("An AAC access unit ends before its end element.");
+            }
             int id = (int)br.Read(3);
             switch (id)
             {
                 case 0: // SCE
                 {
                     int slot = Slot((int)br.Read(4), false, done, 1);
-                    ReadChannelStream(ref br, _ch[slot], commonWindow: false);
-                    CheckOverrun(in br);
-                    ApplyPns(_ch[slot], null, 0);
-                    ApplyTns(_ch[slot]);
+                    if (slot < 0) return false;
+                    if (!ReadChannelStream(ref br, _ch[slot], commonWindow: false)) return false;
+                    if (Truncated(in br)) return false;
+                    if (!_parseOnly)
+                    {
+                        ApplyPns(_ch[slot], null, 0);
+                        ApplyTns(_ch[slot]);
+                    }
                     done += 1;
                     break;
                 }
                 case 1: // CPE
                 {
                     int slot = Slot((int)br.Read(4), true, done, 2);
-                    ReadPair(ref br, _ch[slot], _ch[slot + 1]);
+                    if (slot < 0) return false;
+                    if (!ReadPair(ref br, _ch[slot], _ch[slot + 1])) return false;
                     done += 2;
                     break;
                 }
                 case 2:
-                    throw new UnsupportedAudioFormatException("AAC coupling channel elements are not supported.");
+                    return FailUnsupported("AAC coupling channel elements are not supported.");
                 case 3:
-                    throw new UnsupportedAudioFormatException("AAC LFE elements are not supported.");
+                    return FailUnsupported("AAC LFE elements are not supported.");
                 case 4: // DSE
                     SkipDataStream(ref br);
                     break;
@@ -138,15 +212,10 @@ internal sealed partial class AacFrameDecoder
                     end = true;
                     break;
             }
-            CheckOverrun(in br);
+            if (Truncated(in br)) return false;
         }
-        if (done != _channels) throw new AudioFormatException("An AAC access unit has fewer channels than the stream configuration.");
-        for (int c = 0; c < _channels; c++)
-        {
-            Synthesize(_ch[c]);
-            var t = _ch[c].Time;
-            for (int i = 0; i < FrameSize; i++) pcm[i * _channels + c] = t[i];
-        }
+        if (done != _channels) return Fail("An AAC access unit has fewer channels than the stream configuration.");
+        return true;
     }
 
     private void Note(AacChannelState c)
@@ -165,6 +234,7 @@ internal sealed partial class AacFrameDecoder
     }
 
     // Finds the output channel of an element: by its instance tag when the config listed the front elements, otherwise in order.
+    // Returns -1 (after recording the reason) when the element does not fit.
     private int Slot(int tag, bool pair, int done, int width)
     {
         int slot = done;
@@ -178,20 +248,15 @@ internal sealed partial class AacFrameDecoder
                 if (tags[i] == tag && _frontIsCpe[i] == pair) { slot = at; break; }
                 at += w;
             }
-            if (slot < 0) throw new AudioFormatException("An AAC element has an instance tag that the program config element does not list.");
+            if (slot < 0) { Fail("An AAC element has an instance tag that the program config element does not list."); return -1; }
         }
-        if (slot + width > _channels) throw new AudioFormatException("An AAC access unit has more channels than the stream configuration.");
+        if (slot + width > _channels) { Fail("An AAC access unit has more channels than the stream configuration."); return -1; }
         for (int i = 0; i < width; i++)
         {
-            if (_filled[slot + i]) throw new AudioFormatException("An AAC access unit has two elements for the same channel.");
+            if (_filled[slot + i]) { Fail("An AAC access unit has two elements for the same channel."); return -1; }
             _filled[slot + i] = true;
         }
         return slot;
-    }
-
-    private static void CheckOverrun(in AacBitReader br)
-    {
-        if (br.Overrun) throw new AudioFormatException("An AAC access unit is truncated.");
     }
 
     private static void SkipProgramConfig(ref AacBitReader br)
@@ -232,7 +297,7 @@ internal sealed partial class AacFrameDecoder
 
     // --- channel elements --------------------------------------------------------------------------------------------
 
-    private void ReadPair(ref AacBitReader br, AacChannelState l, AacChannelState r)
+    private bool ReadPair(ref AacBitReader br, AacChannelState l, AacChannelState r)
     {
         bool common = br.ReadBit();
         Array.Clear(_msUsed);
@@ -240,10 +305,10 @@ internal sealed partial class AacFrameDecoder
         bool msPresent = false;
         if (common)
         {
-            ReadIcsInfo(ref br, l);
+            if (!ReadIcsInfo(ref br, l)) return false;
             r.CopyIcsFrom(l);
             int mask = (int)br.Read(2);
-            if (mask == 3) throw new AudioFormatException("An AAC channel pair has a reserved ms_mask_present value.");
+            if (mask == 3) return Fail("An AAC channel pair has a reserved ms_mask_present value.");
             if (mask == 1)
             {
                 for (int g = 0; g < l.NumGroups; g++)
@@ -259,11 +324,10 @@ internal sealed partial class AacFrameDecoder
                 msPresent = true;
             }
         }
-        ReadChannelStream(ref br, l, common);
-        CheckOverrun(in br);
-        ReadChannelStream(ref br, r, common);
-        CheckOverrun(in br);
+        if (!ReadChannelStream(ref br, l, common) || Truncated(in br)) return false;
+        if (!ReadChannelStream(ref br, r, common) || Truncated(in br)) return false;
 
+        if (_parseOnly) return true;
         if (common && msPresent)
         {
             // 14496-3 4.6.13: a band that is noise in both channels with ms_used set shares one noise vector and is not
@@ -286,19 +350,20 @@ internal sealed partial class AacFrameDecoder
         ApplyPns(r, _correlated, 1);
         ApplyTns(l);
         ApplyTns(r);
+        return true;
     }
 
     // 14496-3 4.4.2.1 individual_channel_stream
-    private void ReadChannelStream(ref AacBitReader br, AacChannelState c, bool commonWindow)
+    private bool ReadChannelStream(ref AacBitReader br, AacChannelState c, bool commonWindow)
     {
         int globalGain = (int)br.Read(8);
-        if (!commonWindow) ReadIcsInfo(ref br, c);
-        ReadSectionData(ref br, c);
-        ReadScaleFactors(ref br, c, globalGain);
+        if (!commonWindow && !ReadIcsInfo(ref br, c)) return false;
+        if (!ReadSectionData(ref br, c)) return false;
+        if (!ReadScaleFactors(ref br, c, globalGain)) return false;
         c.PulsePresent = br.ReadBit();
         if (c.PulsePresent)
         {
-            if (c.IsShort) throw new AudioFormatException("An AAC short-block channel carries pulse data.");
+            if (c.IsShort) return Fail("An AAC short-block channel carries pulse data.");
             c.PulseCount = (int)br.Read(2) + 1;
             c.PulseStartBand = (int)br.Read(6);
             for (int i = 0; i < c.PulseCount; i++)
@@ -309,15 +374,17 @@ internal sealed partial class AacFrameDecoder
         }
         c.TnsPresent = br.ReadBit();
         if (c.TnsPresent) ReadTns(ref br, c);
-        if (br.ReadBit()) throw new UnsupportedAudioFormatException("AAC gain control (SSR) data is not supported.");
-        CheckOverrun(in br);
-        ReadSpectralData(ref br, c);
+        if (br.ReadBit()) return FailUnsupported("AAC gain control (SSR) data is not supported.");
+        if (Truncated(in br)) return false;
+        if (!ReadSpectralData(ref br, c)) return false;
+        if (_parseOnly) return true;
         Dequantize(c);
         Note(c);
+        return true;
     }
 
     // 14496-3 4.4.2.1 ics_info
-    private void ReadIcsInfo(ref AacBitReader br, AacChannelState c)
+    private bool ReadIcsInfo(ref AacBitReader br, AacChannelState c)
     {
         br.Skip(1); // ics_reserved_bit
         c.WindowSequence = (int)br.Read(2);
@@ -326,7 +393,7 @@ internal sealed partial class AacFrameDecoder
         {
             c.TotalSfb = _longBandCount;
             c.MaxSfb = (int)br.Read(6);
-            if (br.ReadBit()) throw new AudioFormatException("An AAC-LC channel carries prediction data (predictor_data_present).");
+            if (br.ReadBit()) return Fail("An AAC-LC channel carries prediction data (predictor_data_present).");
             c.NumGroups = 1;
             c.GroupLength[0] = 1;
         }
@@ -343,11 +410,12 @@ internal sealed partial class AacFrameDecoder
                 else c.GroupLength[c.NumGroups++] = 1;
             }
         }
-        if (c.MaxSfb > c.TotalSfb) throw new AudioFormatException("An AAC channel has max_sfb beyond the scalefactor bands of its sampling rate.");
+        if (c.MaxSfb > c.TotalSfb) return Fail("An AAC channel has max_sfb beyond the scalefactor bands of its sampling rate.");
+        return true;
     }
 
     // 14496-3 4.4.2.1 section_data
-    private static void ReadSectionData(ref AacBitReader br, AacChannelState c)
+    private bool ReadSectionData(ref AacBitReader br, AacChannelState c)
     {
         int lenBits = c.IsShort ? 3 : 5;
         int escape = (1 << lenBits) - 1;
@@ -363,20 +431,21 @@ internal sealed partial class AacFrameDecoder
                 while (incr == escape)
                 {
                     len += escape;
-                    if (br.Overrun) throw new AudioFormatException("An AAC access unit is truncated.");
+                    if (Truncated(in br)) return false;
                     incr = (int)br.Read(lenBits);
                 }
                 len += incr;
-                if (cb == ReservedBook) throw new AudioFormatException("An AAC section uses the reserved codebook 12.");
-                if (len == 0 || band + len > c.MaxSfb) throw new AudioFormatException("An AAC section runs past max_sfb.");
+                if (cb == ReservedBook) return Fail("An AAC section uses the reserved codebook 12.");
+                if (len == 0 || band + len > c.MaxSfb) return Fail("An AAC section runs past max_sfb.");
                 for (int i = 0; i < len; i++) c.Codebook[g * 16 + band + i] = (byte)cb;
                 band += len;
             }
         }
+        return true;
     }
 
     // 14496-3 4.4.2.5 scale_factor_data and 4.6.2.3 decoding of scalefactors
-    private static void ReadScaleFactors(ref AacBitReader br, AacChannelState c, int globalGain)
+    private bool ReadScaleFactors(ref AacBitReader br, AacChannelState c, int globalGain)
     {
         var huff = AacHuffman.Books[12]!;
         int factor = globalGain;
@@ -409,18 +478,19 @@ internal sealed partial class AacFrameDecoder
                     case IntensityBook:
                     case IntensityBook2:
                         position += huff.Decode(ref br) - 60;
-                        if (position is < -1000 or > 1000) throw new AudioFormatException("An AAC intensity position is out of range.");
+                        if (position is < -1000 or > 1000) return Fail("An AAC intensity position is out of range.");
                         c.Scale[i] = (short)position;
                         break;
                     default:
                         factor += huff.Decode(ref br) - 60;
-                        if (factor is < 0 or > 255) throw new AudioFormatException("An AAC scalefactor is out of range.");
+                        if (factor is < 0 or > 255) return Fail("An AAC scalefactor is out of range.");
                         c.Scale[i] = (short)factor;
                         break;
                 }
             }
-            if (br.Overrun) throw new AudioFormatException("An AAC access unit is truncated.");
+            if (Truncated(in br)) return false;
         }
+        return true;
     }
 
     // 14496-3 4.4.2.2 / 4.6.9 tns_data

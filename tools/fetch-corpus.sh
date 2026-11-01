@@ -74,6 +74,8 @@ ENTRIES=(
   # EBU loudness test set v05 (Tech 3341 / 3342 minimum-requirement signals). The EBU site refuses some networks (HTTP 403 from its CDN),
   # so this pins the Internet Archive's copy of https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip; the SHA-256 is that of the EBU file.
   "ebu-loudness-v05|https://web.archive.org/web/20170331172519id_/https://tech.ebu.ch/docs/testmaterial/ebu-loudness-test-setv05.zip|9cc500b4df83f7c21855c74dce795ef5209a752bf884253ae57d0ce512efb062|zip"
+  # A public 3GP phone clip whose AMR-NB samples hold four frames each (3GPP TS 26.244 allows several per sample), from the MPlayer sample archive. No licence is stated: fetch-only, never committed.
+  "containers-mrbean|https://samples.mplayerhq.hu/mobileVideo_3gp/MrBean.3gp|040b1d97d45bbd82886dc57437a8e5530857233791bd28815d59e847fa92fcc2|raw"
   # MPEG-4 audio conformance streams in MP4 (ISO/IEC 14496-26, ISO publicly-available licence): container tests only, fetch-only.
   "aac-iso-aabper01|https://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_14496-26_2010_Bitstreams/DVD1/mpeg4audio-conformance/compressedMp4/aabper01.mp4|769d15bf99389a5935beb6a8b2b3e191652382926ef4a1f60796d0632c5a243c|raw"
   "aac-iso-Abv3_Aab01|https://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_14496-26_2010_Bitstreams/DVD1/mpeg4audio-conformance/compressedMp4/Abv3_Aab01.mp4|3f80f9be377c345dc7dbc87cd5cd1c7b9821a29d60db26e815347c69566f5420|raw"
