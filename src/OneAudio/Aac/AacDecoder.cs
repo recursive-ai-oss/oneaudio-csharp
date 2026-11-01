@@ -11,25 +11,35 @@ namespace OneAudio.Aac;
 /// </para>
 /// <para>
 /// <b>HE-AAC.</b> SBR (ISO/IEC 14496-3 4.6.18, in the complex-valued high-quality form) turns a core at rate f into output
-/// at 2f; parametric stereo (4.6.19) makes a stereo output from a mono core. All three signalling forms work: explicit
-/// hierarchical (object types 5 and 29), backward-compatible (sync extension 0x2b7 / 0x548 after the core config), and
-/// implicit (SBR data in the fill elements of a plain AAC-LC config). For the first two the config says what to expect; for a
-/// stream that announces nothing, or announces SBR without parametric stereo on a mono core, the decoder reads up to
-/// 256 access units when it is opened to see whether SBR and parametric stereo data are present, so <see cref="Format"/> is
-/// right from the first read. An output rate equal to the core rate in the config selects the downsampled SBR mode, which
-/// keeps the core rate. Parametric stereo with inter-channel phase and overall phase parameters (IPD/OPD) is decoded with
-/// those parameters ignored, as a baseline-profile decoder does. The SBR CRC, when present, is skipped, not checked.
-/// An implicit HE-AAC stream decodes at its full rate (twice the rate in its config); versions before 1.6.0 returned only
-/// the core there.
+/// at 2f, up to 96 kHz; parametric stereo (4.6.19) makes a stereo output from a mono core. Mono and stereo cores, including
+/// coupled channel pairs, work at core rates from 8 to 48 kHz. All three signalling forms work: explicit hierarchical
+/// (object types 5 and 29), backward-compatible (sync extension 0x2b7 / 0x548 after the core config), and implicit (SBR
+/// data in the fill elements of a plain AAC-LC config). An extension rate in the config equal to the core rate selects the
+/// downsampled SBR mode, which keeps the core rate; any other extension rate means output at twice the core rate.
+/// <see cref="SbrActive"/> and <see cref="PsActive"/> report what the decoder runs, and <see cref="Format"/> is final from
+/// the moment the decoder is created. For a stream whose config leaves SBR or parametric stereo open (it announces
+/// nothing, or SBR on a mono core without parametric stereo) the decoder reads up to 256 access units at open to see whether
+/// SBR and parametric stereo data are present, unless it is created with <c>probeAtOpen</c> false (or through an
+/// <see cref="AacCodec"/> whose <see cref="AacCodec.ProbeAtOpen"/> is false), which trusts the config. Parametric stereo is
+/// decoded in the baseline profile: the inter-channel and overall phase parameters (IPD/OPD) are parsed and ignored, so a
+/// stream that uses them still decodes, to the output of a baseline decoder. The SBR CRC, when present, is skipped, not
+/// checked. An implicit HE-AAC stream decodes at its full rate (twice the rate in its config); versions before 1.6.0
+/// returned only the core there.
 /// </para>
 /// <para>
-/// <b>Not supported</b> (typed <see cref="UnsupportedAudioFormatException"/> at open or at the first frame that needs it):
-/// more than two channels, program config elements with anything but front channels, coupling channels and LFE, rates above
-/// 48 kHz and 7350 Hz for the core, 960-sample frames, object types other than 2, dual-mono SBR (two single channel
-/// elements, each with its own SBR data) and an SBR output rate that is neither the core rate nor twice it.
+/// <b>Not supported</b> (typed <see cref="UnsupportedAudioFormatException"/>): more than two channels, program config elements
+/// with anything but front channels, coupling channels and LFE, core rates above 48 kHz and 7350 Hz, 960-sample frames,
+/// object types other than 2 (AAC-LC, alone or under SBR / PS), and two HE-AAC forms that are refused when the decoder knows
+/// of them. <i>Dual mono SBR</i>, two single channel elements that each carry SBR data, is refused at open when the config
+/// announces SBR on such a layout or the access units read at open show it, else at the first access unit that carries it.
+/// An <i>SBR header whose bs_start_freq is not 9 at an SBR output rate of 64, 88.2 or 96 kHz</i> (core 32, 44.1 or 48 kHz) is
+/// refused the same way, at open when the header is in the units read at open and otherwise when the header arrives,
+/// because the band offsets for those rates are not in the specification the decoder is built from. The other
+/// unsupported cases are decided from the config at open, or at the first access unit that uses the element. Errors that
+/// are not unsupported features throw <see cref="AudioFormatException"/>.
 /// </para>
 /// <para>
-/// <b>Length and position.</b> The container's priming (encoder delay, from an edit list or iTunes gapless data) is dropped
+/// /// <b>Length and position.</b> The container's priming (encoder delay, from an edit list or iTunes gapless data) is dropped
 /// from the start and <see cref="LengthFrames"/> is the container's trimmed length, so the decoded length is the true
 /// length. Container positions are counted at the container's sample rate and converted to the output rate. Seeking decodes
 /// whole frames before the target to rebuild the MDCT overlap; for plain AAC-LC the result then equals a linear decode
@@ -80,8 +90,24 @@ public sealed class AacDecoder : IAudioDecoder
     /// <param name="packets">A packet source whose <see cref="IPacketSource.CodecConfig"/> holds the AudioSpecificConfig.</param>
     /// <param name="limits">Limits to enforce; the channel count and rate are checked before any buffer is made.</param>
     /// <exception cref="AudioFormatException">The config is missing or invalid.</exception>
-    /// <exception cref="UnsupportedAudioFormatException">The stream is not mono or stereo AAC-LC (with or without SBR / PS) at a core rate of 8-48 kHz.</exception>
-    public AacDecoder(IPacketSource packets, AudioLimits? limits = null)
+    /// <exception cref="UnsupportedAudioFormatException">The stream is not mono or stereo AAC-LC (with or without SBR / PS) at a core rate of 8-48 kHz, or uses an HE-AAC form listed under Not supported.</exception>
+    public AacDecoder(IPacketSource packets, AudioLimits? limits = null) : this(packets, limits, true)
+    {
+    }
+
+    /// <summary>Opens a decoder, choosing whether to look into the stream for SBR and parametric stereo that the config does not announce.</summary>
+    /// <param name="packets">A packet source whose <see cref="IPacketSource.CodecConfig"/> holds the AudioSpecificConfig.</param>
+    /// <param name="limits">Limits to enforce; the channel count and rate are checked before any buffer is made.</param>
+    /// <param name="probeAtOpen">
+    /// True (the default of the other constructor) reads up to 256 access units at open when the config leaves SBR or
+    /// parametric stereo open, which is right for any stream but delays the first sample on a source that delivers in real
+    /// time. False trusts the config and reads no access units to find out (a config that announces parametric stereo over a stereo channel configuration still reads the first unit to tell a mono core from a stereo one): a config that announces nothing is plain AAC-LC (SBR data
+    /// that shows up is skipped and reported by <see cref="SbrDataIgnored"/>), and a config that announces SBR on a mono core
+    /// is SBR without parametric stereo unless it announces parametric stereo itself.
+    /// </param>
+    /// <exception cref="AudioFormatException">The config is missing or invalid.</exception>
+    /// <exception cref="UnsupportedAudioFormatException">The stream is not mono or stereo AAC-LC (with or without SBR / PS) at a core rate of 8-48 kHz, or uses an HE-AAC form listed under Not supported.</exception>
+    public AacDecoder(IPacketSource packets, AudioLimits? limits, bool probeAtOpen)
     {
         ArgumentNullException.ThrowIfNull(packets);
         limits ??= AudioLimits.Default;
@@ -99,10 +125,12 @@ public sealed class AacDecoder : IAudioDecoder
             limits.CheckChannels(coreChannels);
             limits.CheckSampleRate(_config.SampleRate);
             bool sbr = _config.SbrSignalled || _config.PsSignalled;
+            if (sbr && coreChannels == 2 && _config.IsDualMonoLayout) throw new UnsupportedAudioFormatException(AacFrameDecoder.DualMonoMessage);
             bool ps = _config.PsSignalled && coreChannels == 1;
             bool downsampled = sbr && _config.ExtensionSampleRate == _config.SampleRate;
-            if (!ps && (!sbr || coreChannels == 1)) Probe(coreChannels, ref sbr, ref ps, ref downsampled);
+            if (probeAtOpen && !ps && (!sbr || coreChannels == 1)) Probe(coreChannels, ref sbr, ref ps, ref downsampled);
             int rate = sbr && !downsampled ? 2 * _config.SampleRate : _config.SampleRate;
+            PsActive = ps;
             _channels = ps ? 2 : coreChannels;
             limits.CheckChannels(_channels);
             limits.CheckSampleRate(rate);
@@ -172,6 +200,7 @@ public sealed class AacDecoder : IAudioDecoder
             _replayCount++;
             if (packet.Data.Length == 0) continue;
             if (parser.Probe(packet.Data, out _) != AacProbeResult.Frame || !parser.SbrPresent) continue;
+            if (parser.SbrDualMono) throw new UnsupportedAudioFormatException(AacFrameDecoder.DualMonoMessage);
             found = true;
             scan.Scan(parser.SbrPayload, parser.SbrBits, parser.SbrCrc, parser.SbrPair);
             if (coreChannels == 2 || scan.PsSeen) break;
@@ -183,12 +212,28 @@ public sealed class AacDecoder : IAudioDecoder
         }
     }
 
-    /// <summary>The parsed AudioSpecificConfig.</summary>
+    /// <summary>The parsed AudioSpecificConfig. Its <see cref="AacAudioConfig.SbrSignalled"/> and <see cref="AacAudioConfig.PsSignalled"/> say what the config announced; <see cref="SbrActive"/> and <see cref="PsActive"/> say what this decoder is doing.</summary>
     public AacAudioConfig Config => _config;
 
     /// <summary>
+    /// True when the decoder runs spectral band replication: the config announced it, or (for a stream that announced nothing)
+    /// SBR data showed in the access units read at open. Fixed when the decoder is created and valid at once. In the
+    /// downsampled SBR mode this is true while <see cref="Format"/> keeps the core rate. False for plain AAC-LC, including
+    /// a stream whose SBR data first appears after the access units read at open (see <see cref="SbrDataIgnored"/>).
+    /// </summary>
+    public bool SbrActive => _sbr is not null;
+
+    /// <summary>
+    /// True when parametric stereo expands a mono core to two output channels: announced by the config, or found in the access
+    /// units read at open. Fixed when the decoder is created and valid at once. Implies <see cref="SbrActive"/>.
+    /// </summary>
+    public bool PsActive { get; }
+
+    /// <summary>
     /// True once an access unit carried SBR data in a fill element that this decoder skipped. That happens only when the
-    /// stream announced no SBR and none showed in its first 256 access units, so the decoder was opened as plain AAC-LC.
+    /// stream announced no SBR and none showed in the access units read at open, so the decoder runs as plain AAC-LC
+    /// (<see cref="SbrActive"/> is false): the output is the core only, at the core rate. Never true while <see cref="SbrActive"/> is.
+    /// It turns true while reading, at the first such unit, so check it after decoding.
     /// </summary>
     public bool SbrDataIgnored => _sbr is null && _core.SbrDataSeen;
 
@@ -293,6 +338,7 @@ public sealed class AacDecoder : IAudioDecoder
         }
         if (_sbr is not null)
         {
+            if (decoded && _core.SbrDualMono) throw new UnsupportedAudioFormatException(AacFrameDecoder.DualMonoMessage);
             if (decoded && _core.SbrPresent) _sbr.SetPayload(_core.SbrPayload, _core.SbrBits, _core.SbrCrc, _core.SbrPair);
             else _sbr.NoPayload();
             _sbr.Process(_coreBuf, _buf);

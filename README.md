@@ -8,7 +8,7 @@ Package id `RecursiveAI.OneAudio`, namespace `OneAudio`. License: MIT OR Apache-
 
 - **One-call layer** (`Audio`): `Load`, `Open`, `mixer.Play(path)` / `PlayStream`, `Transcode`, `Resample`, `Measure`, `Normalize`, with every codec registered by default.
 - Format-detecting open (`AudioDecoder.Open`) with explicit registration of containers and codecs (`AddWav`, `AddOgg`, `AddVorbis`, `AddOpus`, `AddFlac`, `AddMp3`, `AddMp4`, `AddAdts`, `AddAac`, `AddAmr`), so unused codecs trim away.
-- **Decode:** WAV / RF64 (PCM 8/16/24/32-bit, IEEE float 32/64, `WAVE_FORMAT_EXTENSIBLE`), Ogg (chained streams, seeking), Vorbis, Opus, FLAC (native and in Ogg, bit-exact integer reads, STREAMINFO MD5 check) MP3 (MPEG-1/2/2.5 Layer III, ID3v2, Xing/LAME gapless), AAC-LC and HE-AAC v1/v2 (SBR and parametric stereo; mono and stereo, core rates up to 48 kHz, in M4A/MP4/3GP and ADTS, gapless) and AMR / AMR-WB speech (.amr, .awb, 3GP). Streaming into caller-provided spans, sample-accurate seeking everywhere.
+- **Decode:** WAV / RF64 (PCM 8/16/24/32-bit, IEEE float 32/64, `WAVE_FORMAT_EXTENSIBLE`), Ogg (chained streams, seeking), Vorbis, Opus, FLAC (native and in Ogg, bit-exact integer reads, STREAMINFO MD5 check) MP3 (MPEG-1/2/2.5 Layer III, ID3v2, Xing/LAME gapless), AAC-LC and HE-AAC v1/v2 (SBR and parametric stereo; mono and stereo, core rates up to 48 kHz and output up to 96 kHz, in M4A/MP4/3GP and ADTS, gapless) and AMR / AMR-WB speech (.amr, .awb, 3GP). Streaming into caller-provided spans, sample-accurate seeking everywhere.
 - **MP4 / 3GP reader:** `Mp4PacketSource` covers what the AAC and AMR decoders need (audio tracks with `mp4a`, `samr` and `sawb` sample entries, edit lists, sample-exact seeking) and is maintained for bug fixes only. Fragmented MP4, QuickTime sound descriptions and other sample entries are out of scope for it; a dedicated media-container library is the place for those.
 - **Encode:** WAV / RF64 (`WavEncoder`), FLAC levels 0 to 8 (`FlacEncoder`) and Opus (`OpusEncoder`, `OpusMultistreamEncoder`, Ogg Opus writer `OpusFileWriter`). Encoders produce identical bytes for identical input on a platform.
 - **Resampling:** `Polyphase` (Kaiser-windowed sinc), `PolyphaseFast` and `Linear`, independent of how the input is split into blocks.
@@ -62,7 +62,7 @@ kit.Play(mixer, "hit.wav");
 
 | Variant | Size |
 |---|---|
-| `Audio.Load` (default registry, every decoder) | 2 304 392 bytes |
+| `Audio.Load` (default registry, every decoder) | 2 386 520 bytes |
 | `AudioKit` over a WAV-only registry | 1 448 920 bytes |
 | low-level API with a WAV-only registry | 1 436 504 bytes |
 

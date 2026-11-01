@@ -3,6 +3,28 @@
 All notable changes to `RecursiveAI.OneAudio` are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is released. Until then, every `0.x` release may change the API.
 
+## [1.6.1] - 2026-11-01
+
+Fixes and clarifications for HE-AAC decoding. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.
+
+### Fixed
+
+- **Dual-mono SBR was decoded without its high band instead of being refused.** Two single channel elements that each carry SBR data (a stereo program config element of two SCEs) were accepted, and the SBR payload was dropped on every frame, so the output was the core with a silent high band. They now give `UnsupportedAudioFormatException`, as documented in 1.6.0: at open when the config announces SBR on such a layout or the access units read at open carry the data, otherwise at the first access unit that does. A decoder created without SBR (plain AAC-LC) still skips SBR data that first shows up later, as before.
+- The other refusals the 1.6.0 notes name are covered by tests now: an SBR header with `bs_start_freq` other than 9 at an SBR output rate of 64, 88.2 or 96 kHz gives `UnsupportedAudioFormatException` (at open when the header is in the units read at open, else when it arrives), and the out-of-scope cores (object types, channel layouts, rates) give it from the config.
+
+### Added
+
+- `AacDecoder.SbrActive` and `AacDecoder.PsActive`: what the decoder runs, valid as soon as it is created. For implicit and backward-compatible streams `AacAudioConfig.SbrSignalled` / `PsSignalled` stay false when the config does not announce them even though the frames carry SBR or PS (parametric stereo is never announced by the backward-compatible form the conformance streams use), so callers no longer have to compare `Format` with `Config`.
+- `AacDecoder(IPacketSource, AudioLimits?, bool probeAtOpen)` and `AacCodec.ProbeAtOpen`. With the probe off the decoder reads no access units at open and trusts the config: plain AAC-LC when the config announces nothing (SBR data that shows up is skipped and reported by `SbrDataIgnored`), SBR without parametric stereo when SBR is announced on a mono core. The default stays on. Measured cost of the probe at open (warm, 128 kbit/s stereo AAC-LC, x64): 8 ms and about 100 kB read, which is 256 access units, about 6 s of audio at 44.1 kHz; 3 to 4 ms and about 40 kB for a mono HE-AAC stream; a stereo stream whose config announces SBR reads none. On a live source that is the delay before the first sample, which is what the switch is for.
+- `SbrDataIgnored` is documented as the counterpart of `SbrActive`: true only after reading, at the first access unit with SBR data in a decoder that runs as plain AAC-LC, and never while `SbrActive` is true.
+- Tests: AMR files from ffmpeg that older detection took for MP3.
+
+### Changed
+
+- The `AacDecoder` documentation describes the real behaviour: supported rates and modes (cores of 8 to 48 kHz, output up to 96 kHz, the downsampled mode), the three signalling forms, the baseline PS profile, and every case that gives the typed error. The `docs/api.md` HE-AAC paragraph and the README say the same.
+- Correction note for 1.6.0: unrestricted-profile parametric stereo (streams that carry IPD/OPD) decodes as baseline, with the phase parameters parsed and ignored, as other decoders do. It is not refused with a typed error; no part of the decoder or its documentation says otherwise now.
+- The README's NativeAOT size table is re-measured on linux-x64, .NET 10, Release: `Audio.Load` 2 386 520 bytes (was 2 304 392), the WAV-only `AudioKit` 1 448 920 and low-level 1 436 504 bytes, unchanged.
+
 ## [1.6.0] - 2026-11-01
 
 HE-AAC: spectral band replication (SBR) and parametric stereo (PS) decode. `RecursiveAI.OneAudio.Devices` changes only its version number.
