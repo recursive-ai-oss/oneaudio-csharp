@@ -50,6 +50,9 @@ public sealed class AacAudioConfig
     /// <summary>True when the config announces parametric stereo (object type 29 or a 0x548 sync extension that sets it).</summary>
     public bool PsSignalled { get; private set; }
 
+    /// <summary>True when SBR / PS is signalled explicitly, by object type 5 or 29 leading the config; false for the backward-compatible extension after a plain core config, or no signalling.</summary>
+    public bool ExplicitSignalling { get; private set; }
+
     /// <summary>The output sampling rate announced together with SBR, or 0.</summary>
     public int ExtensionSampleRate { get; private set; }
 
@@ -91,6 +94,7 @@ public sealed class AacAudioConfig
         if (aot is 5 or 29)
         {
             c.SbrSignalled = true;
+            c.ExplicitSignalling = true;
             c.PsSignalled = aot == 29;
             if (!ReadRate(ref br, out int extRate, out _)) return false;
             c.ExtensionSampleRate = extRate;
@@ -100,7 +104,9 @@ public sealed class AacAudioConfig
         c.ObjectType = aot is 5 or 29 ? coreAot : aot;
         if (c.ObjectType is 1 or 2 or 3 or 4 or 6 or 7 or 17 or 19 or 20 or 21 or 22 or 23)
         {
-            if (br.BitsLeft < 3) return false;
+            // Some writers leave out the last GASpecificConfig bit (extensionFlag) of an explicit SBR / PS config; when
+            // everything before it is present it is read as 0. Other configs need all three bits.
+            if (br.BitsLeft < (c.ExplicitSignalling ? 2 : 3)) return false;
             c.FrameLength960 = br.ReadBit();
             c.DependsOnCoreCoder = br.ReadBit();
             if (c.DependsOnCoreCoder)
@@ -108,7 +114,8 @@ public sealed class AacAudioConfig
                 if (br.BitsLeft < 14) return false;
                 c.CoreCoderDelay = (int)br.Read(14);
             }
-            c.ExtensionFlag = br.ReadBit();
+            if (br.BitsLeft >= 1) c.ExtensionFlag = br.ReadBit();
+            else if (!c.ExplicitSignalling) return false;
             if (c.ChannelConfiguration == 0)
             {
                 if (!c.ReadProgramConfig(ref br)) return false;
@@ -170,7 +177,8 @@ public sealed class AacAudioConfig
     public void CheckSupported()
     {
         if (SbrSignalled || PsSignalled || ObjectType is 5 or 29)
-            throw new UnsupportedAudioFormatException("AAC with explicit SBR or parametric stereo signalling (HE-AAC) is not supported.");
+            throw new UnsupportedAudioFormatException(
+                $"AAC with {(ExplicitSignalling ? "explicit" : "backward-compatible")} {(SbrSignalled ? (PsSignalled ? "SBR and parametric stereo" : "SBR") : "parametric stereo")} signalling (HE-AAC) is not supported.");
         if (ObjectType != 2)
             throw new UnsupportedAudioFormatException($"AAC audio object type {ObjectType} is not supported; only AAC-LC (2) is.");
         if (ProgramConfigIsComplex)

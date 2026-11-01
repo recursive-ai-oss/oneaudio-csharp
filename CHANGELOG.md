@@ -5,6 +5,15 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-01
+
+Two fixes to how the AAC AudioSpecificConfig reports HE-AAC signalling. `RecursiveAI.OneAudio.Devices` changes only its version number.
+
+### Fixed
+
+- Explicit SBR and PS configurations (audio object type 5 or 29) written without the final GASpecificConfig `extensionFlag` bit, as MP4Box does (`2b 8a 08`, `eb 92 08`), were rejected as "truncated or invalid". A missing trailing `extensionFlag` is now read as 0 when everything before it is present, so these configurations parse and report their SBR/PS signalling, and opening them gives `UnsupportedAudioFormatException`. Truly truncated configurations still give `AudioFormatException`.
+- The "not supported" message for HE-AAC called every SBR/PS configuration "explicit". It now says whether the signalling is explicit or backward-compatible, and whether parametric stereo is present. New property `AacAudioConfig.ExplicitSignalling`.
+
 ## [1.5.0] - 2026-10-31
 
 An AAC frame-length probe, per-packet discard padding for packet sources, and a fix for 3GP files that store several AMR frames per sample. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.
