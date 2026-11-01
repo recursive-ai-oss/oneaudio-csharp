@@ -54,7 +54,16 @@ internal sealed partial class AacFrameDecoder
     /// <summary>True when the SBR payload followed a channel pair element, false after a single channel element.</summary>
     internal bool SbrPair { get; private set; }
 
+    internal const string DualMonoMessage = "HE-AAC with two single channel elements that each carry SBR data (dual mono) is not supported.";
+
     private bool _lastPair;
+    private int _elements;   // channel elements read so far in the unit being parsed
+
+    /// <summary>
+    /// True when the last parsed unit carried SBR data after a single channel element of a two-channel core: two mono elements
+    /// each with their own SBR data ("dual mono"), which SBR decoding here does not cover.
+    /// </summary>
+    internal bool SbrDualMono { get; private set; }
 
     /// <summary>Tools seen in the frames decoded so far.</summary>
     internal AacTools Tools { get; private set; }
@@ -183,6 +192,8 @@ internal sealed partial class AacFrameDecoder
         bool end = false;
         Array.Clear(_filled);
         SbrPresent = false;
+        SbrDualMono = false;
+        _elements = 0;
         while (!end)
         {
             if (br.BitsLeft < 3)
@@ -205,6 +216,7 @@ internal sealed partial class AacFrameDecoder
                         ApplyTns(_ch[slot]);
                     }
                     done += 1;
+                    _elements++;
                     _lastPair = false;
                     break;
                 }
@@ -214,6 +226,7 @@ internal sealed partial class AacFrameDecoder
                     if (slot < 0) return false;
                     if (!ReadPair(ref br, _ch[slot], _ch[slot + 1])) return false;
                     done += 2;
+                    _elements++;
                     _lastPair = true;
                     break;
                 }
@@ -327,6 +340,9 @@ internal sealed partial class AacFrameDecoder
                 SbrBits = bits;
                 SbrCrc = ext == 0xE;
                 SbrPair = _lastPair;
+                // 14496-3 4.5.2.8 allows sbr_single_channel_element data per SCE; two of them make a stereo output that
+                // is not the pair syntax the SBR decoder implements.
+                if (_channels == 2 && _elements > 0 && !_lastPair) SbrDualMono = true;
                 SbrPresent = true;
                 return;
             }

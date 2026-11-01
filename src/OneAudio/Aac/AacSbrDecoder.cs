@@ -93,8 +93,8 @@ internal sealed class SbrDecoder
         if (crc) br.Skip(10);
         if (pairElement != (_coreChannels == 2))
         {
-            // an SBR element for the wrong kind of core element (dual mono is not supported)
-            return;
+            // an SBR element for the wrong kind of core element: dual mono, which AacFrameDecoder reports before this point
+            throw new UnsupportedAudioFormatException(AacFrameDecoder.DualMonoMessage);
         }
         bool ok = true;
         if (br.ReadBit())

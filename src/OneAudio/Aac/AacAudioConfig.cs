@@ -67,6 +67,9 @@ public sealed class AacAudioConfig
     internal int[]? FrontTags { get; private set; }
     internal bool[]? FrontIsCpe { get; private set; }
 
+    // Two single channel elements in a program config element: a stereo core whose channels are coded independently.
+    internal bool IsDualMonoLayout => Channels == 2 && FrontIsCpe is { Length: 2 } cpe && !cpe[0] && !cpe[1];
+
     /// <summary>True when the channel layout is carried in a program config element inside the config (channelConfiguration 0).</summary>
     public bool HasProgramConfigElement => ChannelConfiguration == 0;
 
