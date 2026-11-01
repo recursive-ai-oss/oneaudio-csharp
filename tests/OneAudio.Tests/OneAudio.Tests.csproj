@@ -15,6 +15,7 @@
     <PackageReference Include="xunit.v3" Version="4.0.2" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="../../testdata/heaac/*.m4a" Link="testdata/heaac/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../testdata/containers/*" Link="testdata/containers/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../tools/aac-conformance.manifest" Link="testdata/aac/aac-conformance.manifest" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../testdata/flac/*" Link="testdata/flac/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
