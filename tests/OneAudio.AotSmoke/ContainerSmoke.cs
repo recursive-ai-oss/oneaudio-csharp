@@ -49,6 +49,18 @@ internal static class ContainerSmoke
             if (d.Format.SampleRate != 44100 || d.Format.Channels != 1 || total != 5 * 1024) return Fail("aac decode length " + total);
         }
 
+        // HE-AAC v2: an explicit parametric-stereo config over silent mono frames. Exercises the SBR filter banks and the
+        // parametric stereo stages (hybrid filter, decorrelator, rotation) under AOT; silence stays silent.
+        {
+            var units = new List<byte[]>();
+            for (int i = 0; i < 6; i++) units.Add(new byte[] { 0x00, 0x00, 0x00, 0x07 });
+            using var d = new AacDecoder(new SilentUnits(units, new byte[] { 0xEB, 0x92, 0x08 }));
+            var pcm = new float[2 * 512];
+            int total = 0, n;
+            while ((n = d.Read(pcm)) > 0) { for (int i = 0; i < n * 2; i++) if (pcm[i] != 0f) return Fail("he-aac not silent"); total += n; }
+            if (d.Format.SampleRate != 44100 || d.Format.Channels != 2 || total < 5 * 2048) return Fail("he-aac format/length " + total);
+        }
+
         // Frame-length probe: the silent mono unit is 4 bytes; a cut-off one is incomplete; garbage is not AAC.
         var probe = new AacFrameProbe(new byte[] { 0x12, 0x08 });
         if (probe.Probe(new byte[] { 0x00, 0x00, 0x00, 0x07, 0x55 }, out int unitLength) != AacProbeResult.Frame || unitLength != 4) return Fail("aac probe length");
@@ -129,4 +141,26 @@ internal static class ContainerSmoke
         Console.Error.WriteLine("FAIL: " + why);
         return 1;
     }
+}
+
+/// <summary>A packet source of prepared HE-AAC access units (2048 output frames each), for decoding a hand-made stream without a container.</summary>
+sealed class SilentUnits(List<byte[]> units, byte[] config) : IPacketSource
+{
+    private int _next;
+    public CodecId Codec => CodecId.Aac;
+    public long LengthFrames => units.Count * 2048L;
+    public bool CanSeek => true;
+    public ReadOnlyMemory<byte> CodecConfig => config;
+    public bool TryReadPacket(out PacketView packet)
+    {
+        if (_next >= units.Count) { packet = default; return false; }
+        packet = new PacketView(units[_next++], -1, false, 0, 0, 0);
+        return true;
+    }
+    public void SeekToFrame(long frame, out long startFrame)
+    {
+        _next = (int)Math.Clamp(frame / 2048, 0, units.Count);
+        startFrame = _next * 2048L;
+    }
+    public void Dispose() { }
 }
