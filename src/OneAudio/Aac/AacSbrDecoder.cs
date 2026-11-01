@@ -12,6 +12,7 @@ internal sealed class SbrDecoder
     internal const int Slots = 32;              // QMF time slots per frame
     internal const int NumTimeSlots = 16;       // envelope time slots per frame
     private const float ToInternal = 32768f, FromInternal = 1f / 32768f;
+    private const float MaxCoreInput = 16f;        // in units of full scale
 
     private readonly int _fsSbr;                // twice the core rate: the rate the band tables are keyed by
     private readonly int _coreChannels;
@@ -178,7 +179,13 @@ internal sealed class SbrDecoder
         for (int c = 0; c < sbrChannels; c++)
         {
             var ch = _ch[c];
-            for (int i = 0; i < 1024; i++) _in[i] = core[i * _coreChannels + c] * ToInternal;
+            for (int i = 0; i < 1024; i++)
+            {
+                // A hostile stream can make the AAC core output arbitrarily large; the energy sums of the high-band stages would
+                // then overflow to infinity and turn into NaN. Real signals stay within a few times full scale.
+                float v = core[i * _coreChannels + c];
+                _in[i] = (v > MaxCoreInput ? MaxCoreInput : v < -MaxCoreInput ? -MaxCoreInput : v) * ToInternal;
+            }
             for (int s = 0; s < Slots; s++)
             {
                 ch.Analysis.Slot(_in.AsSpan(s * 32, 32), ch.Re[SbrChannel.Overlap + s], ch.Im[SbrChannel.Overlap + s]);

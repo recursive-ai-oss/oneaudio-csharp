@@ -1,3 +1,4 @@
+using OneAudio.Aac;
 using Xunit;
 
 namespace OneAudio.Tests;
@@ -41,16 +42,44 @@ public class AacHeAacBehaviorTests
     [MemberData(nameof(Streams))]
     public void SteadyStateDecodingAllocatesNothing(string name)
     {
-        using var f = File.OpenRead(AacTestEnv.Mp4(name));
-        using var d = AudioDecoder.Open(f, AacTestEnv.Registry, leaveOpen: true);
-        var buf = new float[1000 * d.Format.Channels];
-        for (int i = 0; i < 60; i++) Assert.True(d.Read(buf) > 0); // warm-up: JIT, first-frame tables
+        byte[] file = File.ReadAllBytes(AacTestEnv.Mp4(name));
+        var buf = new float[4096 * 2];
+        // First pass over the whole stream: JIT, first-use tables, every tool the stream uses. The runtime also promotes hot
+        // methods to optimized code on a timer, and that transition can allocate on the calling thread, so wait for it.
+        for (int pass = 0; pass < 2; pass++)
+        {
+            using var warm = AudioDecoder.Open(new MemoryStream(file), AacTestEnv.Registry);
+            while (warm.Read(buf) > 0) { }
+            Thread.Sleep(250);
+        }
+        // Second pass: opening allocates (buffers, tables); the frames after that must not.
+        using var d = AudioDecoder.Open(new MemoryStream(file), AacTestEnv.Registry);
+        int channels = d.Format.Channels;
         long before = GC.GetAllocatedBytesForCurrentThread();
-        int reads = 0;
-        for (; reads < 300; reads++) if (d.Read(buf) == 0) break;
+        long frames = 0;
+        int n;
+        while ((n = d.Read(buf.AsSpan(0, 1000 * channels))) > 0) frames += n;
         long bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        AacTestEnv.Row($"| {name} | allocation | {reads} reads | {bytes} B | - | - | - | {(bytes == 0 ? "pass" : "FAIL")} |");
-        Assert.True(reads >= 100);
+        AacTestEnv.Row($"| {name} | allocation | {frames} frames | {bytes} B | - | - | - | {(bytes == 0 ? "pass" : "FAIL")} |");
+        Assert.True(frames > 100_000);
         Assert.Equal(0, bytes);
+    }
+
+    // A hostile stream can make the AAC core produce arbitrarily large samples (a huge global gain); the SBR energy sums
+    // used to overflow to infinity and the output became NaN (found by the fuzzer).
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HugeCoreSamplesGiveFiniteOutput(bool parametricStereo)
+    {
+        var sbr = new SbrDecoder(22050, 1, false, parametricStereo);
+        var core = new float[1024];
+        for (int i = 0; i < core.Length; i++) core[i] = (i & 1) == 0 ? float.MaxValue : -float.MaxValue;
+        var output = new float[sbr.OutputFrame * sbr.OutputChannels];
+        for (int frame = 0; frame < 4; frame++)
+        {
+            sbr.Process(core, output);
+            foreach (float v in output) Assert.True(float.IsFinite(v));
+        }
     }
 }
