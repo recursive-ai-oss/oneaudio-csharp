@@ -64,7 +64,8 @@ public class AacHeAacConfigTests
     [Theory]
     [InlineData("sbr-compatible.m4a", 44100, 1)]
     [InlineData("sbr-explicit.m4a", 44100, 1)]
-    [InlineData("sbrps-explicit.m4a", 44100, 2)]
+    [InlineData("sbrps-explicit.m4a", 44100, 2)]   // PS config over a stereo core (CPE): SBR stereo, no PS applied
+    [InlineData("sbrps-mono-core.m4a", 44100, 2)]  // PS config over a mono core (SCE): PS expands to stereo
     [InlineData("sbr-implied.m4a", 22050, 1)] // plain LC frames, no SBR anywhere: nothing to expand
     public void HeAacFilesDecodeAtTheSignalledRate(string name, int rate, int channels)
     {
@@ -86,9 +87,10 @@ public class AacHeAacConfigTests
     }
 
     [Fact]
-    public void AnOutputRateThatIsNeitherTheCoreRateNorTwiceItIsRefused()
+    public void AnOddExtensionRateDoesNotRejectTheStream()
     {
-        // explicit SBR: object type 5, core 16 kHz (index 8), mono, output 48 kHz (index 3), then AAC-LC with a plain GASpecificConfig
+        // explicit SBR: object type 5, core 16 kHz (index 8), mono, output 48 kHz (index 3), then AAC-LC with a plain GASpecificConfig.
+        // The rate in the config is advisory: SBR output is twice the core rate, whatever the file says.
         var bits = new List<bool>();
         void Put(int v, int n) { for (int i = n - 1; i >= 0; i--) bits.Add(((v >> i) & 1) != 0); }
         Put(5, 5); Put(8, 4); Put(1, 4); Put(3, 4); Put(2, 5); Put(0, 3);
@@ -97,6 +99,6 @@ public class AacHeAacConfigTests
         for (int i = 0; i < bits.Count; i++) if (bits[i]) bytes[i / 8] |= (byte)(0x80 >> (i % 8));
         var c = AacAudioConfig.Parse(bytes);
         Assert.Equal(48000, c.ExtensionSampleRate);
-        Assert.Throws<UnsupportedAudioFormatException>(() => c.CheckSupported());
+        c.CheckSupported();
     }
 }

@@ -22,8 +22,10 @@ public class AacHeAacConformanceTests
     private static readonly double RmsLimit = Math.Pow(2, -15) / Math.Sqrt(12);
     private static readonly double MaxLimit = Math.Pow(2, -14);
 
-    // Two stereo streams miss the maximum bound inside one frame each, on the attack that follows a very quiet
-    // stretch (RMS over the whole stream is far inside the limit): the largest difference seen is 1.3e-4 and 8.0e-5.
+    // Two stereo streams miss the maximum bound inside one frame each (1.3e-4 and 8.0e-5; RMS over the whole stream is far
+    // inside the limit). Both frames follow a coupled-stereo frame and have a nearly silent core in their first envelope
+    // (SBR gain of 35 and more applied to it, with the compensation boost capped); the error scales with that gain and does not
+    // depend on the transient pointer, the later envelopes or the noise floor of the later envelope. Cause not found.
     private static double MaxBound(string name) => name switch
     {
         "al_sbr_gh_32_2" => 1.5e-4,

@@ -44,17 +44,10 @@ public class AacHeAacBehaviorTests
     {
         byte[] file = File.ReadAllBytes(AacTestEnv.Mp4(name));
         var buf = new float[4096 * 2];
-        // First pass over the whole stream: JIT, first-use tables, every tool the stream uses. The runtime also promotes hot
-        // methods to optimized code on a timer, and that transition can allocate on the calling thread, so wait for it.
-        for (int pass = 0; pass < 2; pass++)
-        {
-            using var warm = AudioDecoder.Open(new MemoryStream(file), AacTestEnv.Registry);
-            while (warm.Read(buf) > 0) { }
-            Thread.Sleep(250);
-        }
-        // Second pass: opening allocates (buffers, tables); the frames after that must not.
         using var d = AudioDecoder.Open(new MemoryStream(file), AacTestEnv.Registry);
         int channels = d.Format.Channels;
+        // A short warm-up: the first frames run first-use code (and the JIT); steady state starts after that.
+        for (int i = 0; i < 8; i++) Assert.True(d.Read(buf.AsSpan(0, 1000 * channels)) > 0);
         long before = GC.GetAllocatedBytesForCurrentThread();
         long frames = 0;
         int n;

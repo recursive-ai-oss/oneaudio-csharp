@@ -59,9 +59,11 @@ internal sealed partial class AacFrameDecoder
     /// <summary>Tools seen in the frames decoded so far.</summary>
     internal AacTools Tools { get; private set; }
 
-    internal AacFrameDecoder(AacAudioConfig config)
+    /// <param name="config">The stream configuration.</param>
+    /// <param name="channels">Core channels when the access units are known to differ from what the config implies; 0 takes them from the config.</param>
+    internal AacFrameDecoder(AacAudioConfig config, int channels = 0)
     {
-        _channels = config.CoreChannels;
+        _channels = channels > 0 ? channels : config.CoreChannels;
         _frontTags = config.FrontTags;
         _frontIsCpe = config.FrontIsCpe;
         _filled = new bool[_channels];

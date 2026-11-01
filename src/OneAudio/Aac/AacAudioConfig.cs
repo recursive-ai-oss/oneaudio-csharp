@@ -187,10 +187,6 @@ public sealed class AacAudioConfig
             throw new UnsupportedAudioFormatException($"AAC audio object type {ObjectType} is not supported; only AAC-LC (2) is.");
         if (ProgramConfigIsComplex)
             throw new UnsupportedAudioFormatException("AAC program config elements with side, back, LFE or coupling channels are not supported.");
-        if (ExtensionSampleRate != 0 && ExtensionSampleRate != SampleRate && ExtensionSampleRate != 2 * SampleRate)
-            throw new UnsupportedAudioFormatException($"HE-AAC with a core rate of {SampleRate} Hz and an output rate of {ExtensionSampleRate} Hz is not supported; the output rate must be the core rate or twice it.");
-        if (PsSignalled && CoreChannels != 1)
-            throw new UnsupportedAudioFormatException("AAC with parametric stereo needs a mono core.");
         if (Channels is < 1 or > 2)
             throw new UnsupportedAudioFormatException(ChannelConfiguration == 0
                 ? $"AAC with {Channels} channels in its program config element is not supported; mono and stereo are."

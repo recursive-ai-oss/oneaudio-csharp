@@ -34,6 +34,13 @@ internal sealed class SbrAdjuster
     private readonly float[] _sineEnergy = new float[SbrBands.MaxFreqCoeffs];
     private readonly float[] _gain = new float[SbrBands.MaxFreqCoeffs];
 
+    public SbrAdjuster()
+    {
+        // The static tables above are created when first touched. Touch them here, at construction, so that the first frame
+        // with SBR data (which can arrive thousands of frames into a stream) allocates nothing.
+        _ = Reciprocal.Length + Smooth.Length + LimiterGainTable.Length;
+    }
+
     private static float[] BuildReciprocals()
     {
         var t = new float[64];

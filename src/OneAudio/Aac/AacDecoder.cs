@@ -92,17 +92,21 @@ public sealed class AacDecoder : IAudioDecoder
             _config = AacAudioConfig.Parse(packets.CodecConfig.Span);
             _config.CheckSupported();
             int coreChannels = _config.CoreChannels;
+            // Parametric stereo is signalled with a stereo channelConfiguration, but real files carry either a mono core
+            // (an SCE: the PS case) or a stereo core (a CPE: plain SBR stereo, to which no PS applies). The first access
+            // unit says which.
+            if (_config.PsSignalled && _config.Channels == 2) coreChannels = DetectCoreChannels();
             limits.CheckChannels(coreChannels);
             limits.CheckSampleRate(_config.SampleRate);
             bool sbr = _config.SbrSignalled || _config.PsSignalled;
-            bool ps = _config.PsSignalled;
+            bool ps = _config.PsSignalled && coreChannels == 1;
             bool downsampled = sbr && _config.ExtensionSampleRate == _config.SampleRate;
             if (!ps && (!sbr || coreChannels == 1)) Probe(coreChannels, ref sbr, ref ps, ref downsampled);
             int rate = sbr && !downsampled ? 2 * _config.SampleRate : _config.SampleRate;
             _channels = ps ? 2 : coreChannels;
             limits.CheckChannels(_channels);
             limits.CheckSampleRate(rate);
-            _core = new AacFrameDecoder(_config);
+            _core = new AacFrameDecoder(_config, coreChannels);
             _frame = sbr ? (downsampled ? CoreFrame : 2 * CoreFrame) : CoreFrame;
             _buf = new float[_frame * _channels];
             if (sbr)
@@ -133,6 +137,25 @@ public sealed class AacDecoder : IAudioDecoder
     private long ToOutput(long containerFrames) => containerFrames * _num / _den;
 
     private long ToContainer(long outputFrames) => outputFrames * _den / _num;
+
+    // Decides between a mono and a stereo core from the first non-empty access unit that parses as one or the other.
+    private int DetectCoreChannels()
+    {
+        _replay = new byte[ProbeUnits][];
+        _replayDiscard = new int[ProbeUnits];
+        var mono = new AacFrameDecoder(_config, 1);
+        var stereo = new AacFrameDecoder(_config, 2);
+        while (_replayCount < ProbeUnits && _src.TryReadPacket(out var packet))
+        {
+            _replay[_replayCount] = packet.Data.ToArray();
+            _replayDiscard[_replayCount] = packet.DiscardEndFrames;
+            _replayCount++;
+            if (packet.Data.Length == 0) continue;
+            if (mono.Probe(packet.Data, out _) == AacProbeResult.Frame) return 1;
+            if (stereo.Probe(packet.Data, out _) == AacProbeResult.Frame) return 2;
+        }
+        return 1;
+    }
 
     // Looks at the first access units for SBR and parametric stereo payloads, for streams whose config does not say.
     private void Probe(int coreChannels, ref bool sbr, ref bool ps, ref bool downsampled)
