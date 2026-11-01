@@ -70,22 +70,13 @@ internal sealed class SbrBands
 
     private static float Octaves(int a, int b) => Ld[b] - Ld[a];
 
-    // 4.6.18.3.2 Table 4.84: offsets added to startMin; one row per class of the SBR sampling rate.
-    private static ReadOnlySpan<sbyte> StartOffset(int fsSbr) => fsSbr switch
-    {
-        < 22050 => [-8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7],
-        < 24000 => [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 9, 11, 13],
-        < 32000 => [-5, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 9, 11, 13, 16],
-        < 44100 => [-6, -4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 9, 11, 13, 16],
-        < 64000 => [-4, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 9, 11, 13, 16, 20],
-        < 88200 => [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 9, 11, 13, 16, 20, 24],
-        _ => [0, 1, 2, 3, 4, 5, 6, 7, 9, 11, 13, 16, 20, 24, 28, 33],
-    };
-
+    // 4.6.18.3.2: the start band is startMin plus an offset chosen by bs_start_freq. For SBR rates up to 48 kHz the reference
+    // decoder's tables are used as published (they follow the same rule, startMin from 3000, 4000 Hz scaled to the 128-band
+    // grid). For 64, 88.2 and 96 kHz the offset rows are not in the published reference code: the conformance streams
+    // al_sbr_sr_64/88/96 only exercise bs_start_freq = 9 (start bands 16, 14 and 14, where the offsets are 6, 7 and 7), so
+    // that is all this decoder accepts at those rates; other values are rejected as unsupported rather than guessed.
     private static int StartBand(int fsSbr, int startFreq)
     {
-        // Rates up to 48 kHz use the constant tables of the reference decoder; higher rates use the formula of 4.6.18.3.2
-        // (startMin from 5000 Hz scaled to the 128-band grid, plus the offset row).
         switch (fsSbr)
         {
             case 16000: return AacSbrTables.StartFreq16[startFreq];
@@ -95,10 +86,19 @@ internal sealed class SbrBands
             case 44100: return AacSbrTables.StartFreq44[startFreq];
             case 48000: return AacSbrTables.StartFreq48[startFreq];
         }
-        if (fsSbr < 64000) return -1;
-        int startMin = (int)(5000.0 * 128.0 / fsSbr + 0.5);
-        return startMin + StartOffset(fsSbr)[startFreq];
+        if (fsSbr >= 64000 && startFreq == 9)
+        {
+            int startMin = (int)(5000.0 * 128.0 / fsSbr + 0.5);
+            return startMin + (fsSbr < 88200 ? 6 : 7);
+        }
+        return fsSbr >= 64000 ? Unverified : -1;
     }
+
+    /// <summary>Marker returned for a band layout this decoder does not decode (see <see cref="StartBand"/>).</summary>
+    internal const int Unverified = -2;
+
+    /// <summary>True when the last <see cref="Reset"/> failed because the header names a start frequency this decoder does not support at a 64, 88.2 or 96 kHz SBR rate.</summary>
+    public bool UnverifiedLayout { get; private set; }
 
     private static int StopMin(int fsSbr) => fsSbr switch
     {
@@ -153,6 +153,7 @@ internal sealed class SbrBands
     private bool UpdateFreqScale(SbrHeader h, int fsSbr)
     {
         int k0 = StartBand(fsSbr, h.StartFreq);
+        UnverifiedLayout = k0 == Unverified;
         if (k0 < 0) return false;
         int k1, k2;
         if (h.StopFreq < 14)

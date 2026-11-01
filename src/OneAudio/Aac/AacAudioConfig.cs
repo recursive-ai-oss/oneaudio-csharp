@@ -14,7 +14,7 @@ public sealed class AacAudioConfig
     /// <summary>Audio object type of the core coder: 2 is AAC-LC, 1 Main, 3 SSR, 4 LTP, 5 SBR, 29 PS, 17+ error-resilient types.</summary>
     public int ObjectType { get; private set; }
 
-    /// <summary>Sampling rate in Hz of the core coder (the rate of the decoded output; SBR, when present, would double it).</summary>
+    /// <summary>Sampling rate in Hz of the core coder. With SBR the decoded output is at twice this rate (see <see cref="ExtensionSampleRate"/>).</summary>
     public int SampleRate { get; private set; }
 
     /// <summary>The 4-bit sampling frequency index; 15 when the rate was written out explicitly.</summary>
@@ -28,6 +28,12 @@ public sealed class AacAudioConfig
     /// configuration is 0. 0 when unknown.
     /// </summary>
     public int Channels { get; private set; }
+
+    /// <summary>
+    /// Channels of the core coder: <see cref="Channels"/>, except that a config announcing parametric stereo describes a mono
+    /// core whose output has two channels, however the channelConfiguration is written.
+    /// </summary>
+    public int CoreChannels => PsSignalled && Channels == 2 && ChannelConfiguration == 2 ? 1 : Channels;
 
     /// <summary>True when the program config element lists anything beyond front channel elements (side, back, LFE or coupling channels; associated data elements are skipped).</summary>
     public bool ProgramConfigIsComplex { get; private set; }
@@ -169,20 +175,22 @@ public sealed class AacAudioConfig
     }
 
     /// <summary>
-    /// Throws when this config is outside what <see cref="AacDecoder"/> decodes: AAC-LC (object type 2), 1024-sample frames,
-    /// one or two channels in channelConfiguration 1 or 2, a core rate of 8-48 kHz from the standard table, no
-    /// explicit SBR or PS signalling and no scalable core coder.
+    /// Throws when this config is outside what <see cref="AacDecoder"/> decodes: AAC-LC (object type 2) as the core, with or
+    /// without SBR and parametric stereo signalling, 1024-sample frames, a mono or stereo core in channelConfiguration 1 or
+    /// 2 (or a program config of front elements), a core rate of 8-48 kHz from the standard table, an SBR output rate of
+    /// zero, the core rate or twice it, and no scalable core coder.
     /// </summary>
     /// <exception cref="UnsupportedAudioFormatException">The stream needs a feature that is not implemented.</exception>
     public void CheckSupported()
     {
-        if (SbrSignalled || PsSignalled || ObjectType is 5 or 29)
-            throw new UnsupportedAudioFormatException(
-                $"AAC with {(ExplicitSignalling ? "explicit" : "backward-compatible")} {(SbrSignalled ? (PsSignalled ? "SBR and parametric stereo" : "SBR") : "parametric stereo")} signalling (HE-AAC) is not supported.");
         if (ObjectType != 2)
             throw new UnsupportedAudioFormatException($"AAC audio object type {ObjectType} is not supported; only AAC-LC (2) is.");
         if (ProgramConfigIsComplex)
             throw new UnsupportedAudioFormatException("AAC program config elements with side, back, LFE or coupling channels are not supported.");
+        if (ExtensionSampleRate != 0 && ExtensionSampleRate != SampleRate && ExtensionSampleRate != 2 * SampleRate)
+            throw new UnsupportedAudioFormatException($"HE-AAC with a core rate of {SampleRate} Hz and an output rate of {ExtensionSampleRate} Hz is not supported; the output rate must be the core rate or twice it.");
+        if (PsSignalled && CoreChannels != 1)
+            throw new UnsupportedAudioFormatException("AAC with parametric stereo needs a mono core.");
         if (Channels is < 1 or > 2)
             throw new UnsupportedAudioFormatException(ChannelConfiguration == 0
                 ? $"AAC with {Channels} channels in its program config element is not supported; mono and stereo are."

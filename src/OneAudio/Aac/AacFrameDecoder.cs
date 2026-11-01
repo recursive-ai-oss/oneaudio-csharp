@@ -39,12 +39,29 @@ internal sealed partial class AacFrameDecoder
     /// <summary>True once any frame carried an SBR fill extension (HE-AAC data riding on the core stream), which is skipped.</summary>
     internal bool SbrDataSeen { get; private set; }
 
+    /// <summary>The SBR payload of the access unit last parsed: the bits after the extension type of a fill element, byte aligned.</summary>
+    internal readonly byte[] SbrPayload = new byte[272];
+
+    /// <summary>Length of <see cref="SbrPayload"/> in bits, valid when <see cref="SbrPresent"/>.</summary>
+    internal int SbrBits { get; private set; }
+
+    /// <summary>True when the last parsed unit had an SBR fill element.</summary>
+    internal bool SbrPresent { get; private set; }
+
+    /// <summary>True when the SBR payload starts with a CRC (extension type 0xE).</summary>
+    internal bool SbrCrc { get; private set; }
+
+    /// <summary>True when the SBR payload followed a channel pair element, false after a single channel element.</summary>
+    internal bool SbrPair { get; private set; }
+
+    private bool _lastPair;
+
     /// <summary>Tools seen in the frames decoded so far.</summary>
     internal AacTools Tools { get; private set; }
 
     internal AacFrameDecoder(AacAudioConfig config)
     {
-        _channels = config.Channels;
+        _channels = config.CoreChannels;
         _frontTags = config.FrontTags;
         _frontIsCpe = config.FrontIsCpe;
         _filled = new bool[_channels];
@@ -163,6 +180,7 @@ internal sealed partial class AacFrameDecoder
         int done = 0;
         bool end = false;
         Array.Clear(_filled);
+        SbrPresent = false;
         while (!end)
         {
             if (br.BitsLeft < 3)
@@ -185,6 +203,7 @@ internal sealed partial class AacFrameDecoder
                         ApplyTns(_ch[slot]);
                     }
                     done += 1;
+                    _lastPair = false;
                     break;
                 }
                 case 1: // CPE
@@ -193,6 +212,7 @@ internal sealed partial class AacFrameDecoder
                     if (slot < 0) return false;
                     if (!ReadPair(ref br, _ch[slot], _ch[slot + 1])) return false;
                     done += 2;
+                    _lastPair = true;
                     break;
                 }
                 case 2:
@@ -282,15 +302,32 @@ internal sealed partial class AacFrameDecoder
         br.Skip(count * 8);
     }
 
-    // 14496-3 4.4.2.7 fill_element; an extension_type of 0xD / 0xE is SBR data that a core-only decoder skips.
+    // 14496-3 4.4.2.7 fill_element; an extension_type of 0xD / 0xE is SBR data (4.5.2.8): it is kept for the SBR decoder.
     private void SkipFill(ref AacBitReader br)
     {
         int count = (int)br.Read(4);
         if (count == 15) count += (int)br.Read(8) - 1;
-        if (count > 0 && br.BitsLeft >= 4)
+        if (count > 0 && br.BitsLeft >= count * 8)
         {
             uint ext = br.Peek(4);
-            if (ext is 0xD or 0xE) { SbrDataSeen = true; Tools |= AacTools.SbrFill; }
+            if (ext is 0xD or 0xE)
+            {
+                SbrDataSeen = true;
+                Tools |= AacTools.SbrFill;
+                br.Skip(4);
+                int bits = count * 8 - 4;
+                int bytes = (bits + 7) >> 3;
+                for (int i = 0; i < bytes; i++)
+                {
+                    int take = Math.Min(8, bits - i * 8);
+                    SbrPayload[i] = (byte)(br.Read(take) << (8 - take));
+                }
+                SbrBits = bits;
+                SbrCrc = ext == 0xE;
+                SbrPair = _lastPair;
+                SbrPresent = true;
+                return;
+            }
         }
         br.Skip(count * 8);
     }

@@ -100,6 +100,12 @@ internal sealed class SbrChannel
         }
     }
 
+    public void SaveLpcState()
+    {
+        for (int i = 0; i < 2; i++)
+            for (int k = 0; k < 32; k++) { _lpcRe[i][k] = Re[Cols - 2 + i][k]; _lpcIm[i][k] = Im[Cols - 2 + i][k]; }
+    }
+
     public void ClearLpcState()
     {
         Array.Clear(_lpcRe[0]); Array.Clear(_lpcRe[1]); Array.Clear(_lpcIm[0]); Array.Clear(_lpcIm[1]);
