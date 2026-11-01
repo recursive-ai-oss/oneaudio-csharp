@@ -5,6 +5,10 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-31
+
+An AAC frame-length probe, per-packet discard padding for packet sources, and a fix for 3GP files that store several AMR frames per sample. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.
+
 ### Added
 
 - `AacFrameProbe` and `AacProbeResult`: finds the byte length of the AAC raw_data_block at the start of some bytes by parsing its syntax up to the end element (no transform), for demuxers that must frame unframed AAC. Distinguishes a complete block, a block cut short (`Incomplete`) and bytes that are not AAC; it never throws on bad data and allocates nothing after construction.
