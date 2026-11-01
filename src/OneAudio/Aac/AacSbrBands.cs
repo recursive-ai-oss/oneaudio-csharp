@@ -162,7 +162,7 @@ internal sealed class SbrBands
             if (stopMin < 0) return false;
             var d0 = _diffTot.AsSpan(0, 13);
             CalcBands(d0, stopMin, 64, 13);
-            Shellsort(d0, 13);
+            SortAscending(d0, 13);
             // the stop frequency is the h.StopFreq-th entry of the cumulative sum
             int acc = stopMin;
             k2 = stopMin;
@@ -187,18 +187,18 @@ internal sealed class SbrBands
                 int nb1 = NumberOfBands(bpo, k1, k2, h.AlterScale);
                 if (nb0 < 1 || nb1 < 1 || nb0 > 29 || nb1 > 50) return false;
                 CalcBands(diff0, k0, k1, nb0);
-                Shellsort(diff0, nb0);
+                SortAscending(diff0, nb0);
                 if (diff0[0] == 0) return false;
                 CumSum(k0, diff0, nb0, Master, 0);
                 CalcBands(diff1, k1, k2, nb1);
-                Shellsort(diff1, nb1);
+                SortAscending(diff1, nb1);
                 if (diff0[nb0 - 1] > diff1[0])
                 {
                     int change = diff0[nb0 - 1] - diff1[0];
                     if (change > (diff1[nb1 - 1] - diff1[0]) / 2) change = (diff1[nb1 - 1] - diff1[0]) / 2;
                     diff1[0] = (byte)(diff1[0] + change);
                     diff1[nb1 - 1] = (byte)(diff1[nb1 - 1] - change);
-                    Shellsort(diff1, nb1);
+                    SortAscending(diff1, nb1);
                 }
                 if (nb0 + nb1 > MaxFreqCoeffs) return false;
                 CumSum(k1, diff1, nb1, Master, nb0);
@@ -210,7 +210,7 @@ internal sealed class SbrBands
                 int nb0 = NumberOfBands(bpo, k0, k1, 0);
                 if (nb0 < 1 || nb0 > 29) return false;
                 CalcBands(diff0, k0, k1, nb0);
-                Shellsort(diff0, nb0);
+                SortAscending(diff0, nb0);
                 if (diff0[0] == 0) return false;
                 CumSum(k0, diff0, nb0, Master, 0);
                 NumMaster = nb0;
@@ -269,7 +269,7 @@ internal sealed class SbrBands
         for (int i = 1; i <= length; i++) dest[at + i] = (byte)(dest[at + i - 1] + diff[i - 1]);
     }
 
-    internal static void Shellsort(Span<byte> a, int n)
+    internal static void SortAscending(Span<byte> a, int n)
     {
         // plain insertion sort: the tables are at most 50 entries
         for (int i = 1; i < n; i++)
@@ -391,57 +391,38 @@ internal sealed class SbrBands
         }
         else
         {
+            // Candidate borders: the low-resolution scale-factor borders plus the inner patch borders (relative to the
+            // lower edge), sorted. Borders closer than half a limiter band are merged, keeping patch borders (4.6.18.3.2).
             Span<int> patchBorders = stackalloc int[MaxPatches + 1];
             for (int i = 0; i < NPatches; i++) patchBorders[i] = Patches[i].GuardStartBand - lowSubband;
             patchBorders[NPatches] = highSubband - lowSubband;
-            var work = _work;
+            Span<byte> edges = _work;
             int nLo = NSfb[0];
-            for (int k = 0; k <= nLo; k++) work[k] = (byte)(Table[0][k] - lowSubband);
-            for (int k = 1; k < NPatches; k++) work[nLo + k] = (byte)patchBorders[k];
-            int tempNoLim = nBands = nLo + NPatches - 1;
-            Shellsort(work, tempNoLim + 1);
-            int lo = 0, hi = 1;
-            while (hi <= tempNoLim)
+            for (int k = 0; k <= nLo; k++) edges[k] = (byte)(Table[0][k] - lowSubband);
+            for (int k = 1; k < NPatches; k++) edges[nLo + k] = (byte)patchBorders[k];
+            int count = nLo + NPatches;
+            SortAscending(edges, count);
+            int at = 1;
+            while (at < count)
             {
-                int k2 = work[hi] + lowSubband;
-                int kx = work[lo] + lowSubband;
-                float t = Octaves(kx, k2) * LimiterBandsPerOctave[limiterBands];
-                if (t < 0.49f)
-                {
-                    if (work[hi] == work[lo])
-                    {
-                        work[hi] = (byte)highSubband;
-                        nBands--;
-                        hi++;
-                        continue;
-                    }
-                    bool hiIsBorder = false;
-                    for (int k = 0; k <= NPatches; k++) if (work[hi] == patchBorders[k]) { hiIsBorder = true; break; }
-                    if (!hiIsBorder)
-                    {
-                        work[hi] = (byte)highSubband;
-                        nBands--;
-                        hi++;
-                        continue;
-                    }
-                    bool loIsBorder = false;
-                    for (int k = 0; k <= NPatches; k++) if (work[lo] == patchBorders[k]) { loIsBorder = true; break; }
-                    if (!loIsBorder)
-                    {
-                        work[lo] = (byte)highSubband;
-                        nBands--;
-                    }
-                }
-                lo = hi;
-                hi++;
+                float bandsSpanned = Octaves(edges[at - 1] + lowSubband, edges[at] + lowSubband) * LimiterBandsPerOctave[limiterBands];
+                if (bandsSpanned >= 0.49f) { at++; continue; }
+                int drop;
+                if (edges[at] == edges[at - 1] || !IsPatchBorder(patchBorders, edges[at])) drop = at;
+                else if (!IsPatchBorder(patchBorders, edges[at - 1])) drop = at - 1;
+                else { at++; continue; }
+                for (int k = drop; k + 1 < count; k++) edges[k] = edges[k + 1];
+                count--;
             }
-            Shellsort(work, tempNoLim + 1);
+            nBands = count - 1;
             if (nBands > MaxLimiters || nBands <= 0) return false;
-            for (int k = 0; k <= nBands; k++) Limiter[k] = work[k];
+            for (int k = 0; k <= nBands; k++) Limiter[k] = edges[k];
         }
         NLimiter = nBands;
         return true;
     }
+
+    private static bool IsPatchBorder(ReadOnlySpan<int> borders, int value) => borders.Contains(value);
 
     private static readonly float[] LimiterBandsPerOctave = [1.0f, 1.2f, 2.0f, 3.0f];
 }
