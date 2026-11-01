@@ -69,6 +69,29 @@ public sealed class FormatDetectionTests
         Assert.IsNotType<Mp3Format>(fmt);
     }
 
+    // AMR-NB files written by ffmpeg that older releases misread as MP3; they must open as AMR whatever the registration order.
+    [Theory]
+    [InlineData("voice.amr")]
+    [InlineData("voice.3gp")]
+    public void Ffmpeg_amr_files_are_not_taken_for_mp3(string name)
+    {
+        var path = Path_("detection", name);
+        var head = File.ReadAllBytes(path);
+        var mp3First = new AudioCodecRegistry().AddMp3().AddAmr().AddMp4().AddAac();
+        Assert.IsNotType<Mp3Format>(mp3First.Detect(head.AsSpan(0, Math.Min(head.Length, AudioCodecRegistry.SniffBytes))));
+        foreach (var open in new Func<IAudioDecoder>[] { () => Audio.Open(path), () => AudioDecoder.OpenFile(path, mp3First) })
+        {
+            using var d = open();
+            Assert.Equal(8000, d.Format.SampleRate);
+            Assert.Equal(1, d.Format.Channels);
+            var buf = new float[4096];
+            long frames = 0;
+            int n;
+            while ((n = d.Read(buf)) > 0) frames += n;
+            Assert.InRange(frames, 47_000, 49_000); // 6 s at 8 kHz, give or take the encoder's padding
+        }
+    }
+
     [Fact]
     public void Registration_order_is_the_fallback_only()
     {

@@ -16,6 +16,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="../../testdata/heaac/*.m4a" Link="testdata/heaac/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../testdata/detection/*.amr;../../testdata/detection/*.3gp" Link="testdata/detection/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../testdata/containers/*" Link="testdata/containers/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../tools/aac-conformance.manifest" Link="testdata/aac/aac-conformance.manifest" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../testdata/flac/*" Link="testdata/flac/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
