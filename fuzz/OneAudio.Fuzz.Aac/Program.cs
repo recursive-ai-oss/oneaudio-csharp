@@ -3,7 +3,7 @@ using OneAudio.Aac;
 using OneAudio.Mp4;
 using SharpFuzz;
 
-// Fuzz target for the AAC-LC decoder. The input is: one byte N (the AudioSpecificConfig length, at most 16), the N config
+// Fuzz target for the AAC decoder, SBR and parametric stereo included (a config that signals them, or frames that carry them, reach that code; the seeds include the ISO SBR/PS streams). The input is: one byte N (the AudioSpecificConfig length, at most 16), the N config
 // bytes, then access units each preceded by a 16-bit little-endian length. A config the decoder rejects ends the input;
 // units it rejects with a typed error are skipped (or concealed, when the first config byte's top bit asks for it).
 // A seek back into the stream is made now and then. Anything other than a typed library error escaping is a finding.

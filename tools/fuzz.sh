@@ -101,7 +101,13 @@ seed() {
                    find "$here/testdata" ${ONEAUDIO_CORPUS:+"$ONEAUDIO_CORPUS/aac-iso-lc/mp4"} -type f -iname "$ext" -size -2048k 2>/dev/null | head -n 120 | while read -r f; do
                      dotnet "$work/bin-plain/OneAudio.Fuzz.Aac.dll" --seed "$f" "$corpus/$(basename "${f%.*}").seed" 2>/dev/null || true
                    done
-                 done ;;
+                 done
+                 # HE-AAC: every SBR and parametric stereo stream, so the fuzzer starts from valid SBR payloads.
+                 if [ -n "${ONEAUDIO_CORPUS:-}" ]; then
+                   find "$ONEAUDIO_CORPUS/aac-iso-lc/mp4" -type f -iname 'al_sbr_*.mp4' -size -2048k 2>/dev/null | while read -r f; do
+                     dotnet "$work/bin-plain/OneAudio.Fuzz.Aac.dll" --seed "$f" "$corpus/$(basename "${f%.*}").seed" 2>/dev/null || true
+                   done
+                 fi ;;
     amrnb|amrwb) # Raw runs of storage-format frames: the AMR files without their magic line.
                  local ext=amr; [ "$target" = amrwb ] && ext=awb
                  find "$here/testdata" -type f -iname "*.$ext" -size -256k | while read -r f; do

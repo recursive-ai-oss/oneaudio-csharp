@@ -3,18 +3,35 @@
 All notable changes to `RecursiveAI.OneAudio` are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is released. Until then, every `0.x` release may change the API.
 
-## [Unreleased]
+## [1.6.0] - 2026-11-01
+
+HE-AAC: spectral band replication (SBR) and parametric stereo (PS) decode. `RecursiveAI.OneAudio.Devices` changes only its version number.
+
+### Changed
+
+- **Implicit HE-AAC output changes from the half-rate core to full rate.** A stream whose AudioSpecificConfig is plain AAC-LC but whose frames carry SBR data (what many encoders write into MP4/M4A files and what ADTS streams do) used to decode as its core only, at the core sample rate, with `SbrDataIgnored` set. `AacDecoder` now finds the SBR data in the first 256 access units, expands the output to twice the core rate and, when it sees parametric stereo, to two channels. `AudioDecoder.Format.SampleRate` and `Format.Channels` therefore report the full-rate values for those files, and `LengthFrames` is counted at the output rate. `SbrDataIgnored` is now true only for SBR data that first appears after that 256-unit window (the decoder was already running as plain AAC-LC). Explicit and backward-compatible signalling gave a typed "not supported" error before and now decode. There is no switch to get the core-only output back.
+- The trailing-extension handling of 1.5.1 stays: configurations without the final `extensionFlag` parse.
+
+### Added
+
+- SBR (ISO/IEC 14496-3 4.6.18, high-quality mode) for mono and stereo (including coupled channel pairs) at core rates 8 to 48 kHz and output rates up to 96 kHz, with the normal and the down-sampled SBR modes, and PS (8.6.4) with the baseline profile: inter-channel phase and overall phase parameters (IPD/OPD) are parsed and ignored. Verified against the ISO/IEC 14496-26 `al_sbr_*` streams: all 53 SBR streams, the seven parametric stereo streams and their seven `_new` variants reproduce the reference waveforms with exactly the reference frame counts, RMS at most 1.0e-6; the largest difference stays within 2^-14 of full scale except in one frame each of two stereo streams (1.3e-4 and 8.0e-5).
+- The decoder allocates nothing per frame after the first ones, for SBR and for PS; seeking in HE-AAC rebuilds the filter bank and envelope history from three extra frames, so it is close to, not bit-identical with, a linear decode.
+- A parametric-stereo configuration over a stereo core (a channel pair element, as some encoders write for "HE-AAC v2" files with channelConfiguration 2) decodes as SBR stereo with no parametric stereo applied; over a mono core it expands to stereo as before. The first access unit decides, and the output channel count follows the decoded result.
+- The extension sample rate in an AudioSpecificConfig only selects the down-sampled mode when it equals the core rate; any other value means output at twice the core rate, and the container's sample entry only scales lengths. A config whose extension rate is neither the core rate nor twice it no longer gets `UnsupportedAudioFormatException`.
+- `AacAudioConfig.CoreChannels`; `AacDecoder.SbrDataIgnored` documents the new meaning.
+- `Audio.Open(Stream, AudioLimits, bool leaveOpen = false, CancellationToken = default)` (and the same on `AudioKit`), matching the path form.
+- Stream forms with limits where only a path form existed: `Measure(string/Stream, AudioLimits, bool truePeak = true, CancellationToken = default)` on `Audio` and `AudioKit`, `AudioKit.Play(AudioMixer, Stream, ...)` and `AudioKit.PlayStream(AudioMixer, Stream, ...)` (the streaming voice owns the stream and closes it on dispose).
+- `IContainerFormat.HasWeakSignature` (default interface member, false); `Mp3Format` sets it true.
+
+### Not supported
+
+- SBR CRC is skipped, not checked. Dual-mono SBR (two single-channel elements each with SBR data) gives `UnsupportedAudioFormatException`. At SBR output rates of 64, 88.2 and 96 kHz only `bs_start_freq` 9 is accepted; other values give `UnsupportedAudioFormatException` because the band offsets for those rates are not in the public 3GPP decoder specification.
+- Multichannel and 960-sample-frame AAC, error-resilient object types and the `ssc_*` scalable streams still give typed errors.
 
 ### Fixed
 
 - Format detection chooses by signature first. `Audio.Open`, `AudioDecoder.Open` and `AudioCodecRegistry.Detect` used to ask formats in registration order, and the MP3 check (which accepts a frame-header-shaped pattern anywhere in the first 512 bytes) ran before MP4 and AMR, so some 3GP and AMR files were opened as MP3 and failed with "No MPEG audio frame found". Formats with a signature at the start of the file (RIFF/WAVE, OggS, fLaC, ISO BMFF boxes, the AMR magic, ADTS with or without an ID3v2 tag) are now asked first; pattern-matching formats are asked afterwards. Registration order only breaks ties within each group. Detection still only returns registered formats.
 - `docs/api.md` and the Devices package readme showed `using var mixer = Audio.CreateMixer();`, but `AudioMixer` holds only managed memory and starts no threads, so it is not `IDisposable` and needs no disposal. The samples no longer use `using`, and the `CreateMixer` documentation says so.
-
-### Added
-
-- `Audio.Open(Stream, AudioLimits, bool leaveOpen = false, CancellationToken = default)` (and the same on `AudioKit`), matching the path form.
-- Stream forms with limits where only a path form existed: `Measure(string/Stream, AudioLimits, bool truePeak = true, CancellationToken = default)` on `Audio` and `AudioKit`, `AudioKit.Play(AudioMixer, Stream, ...)` and `AudioKit.PlayStream(AudioMixer, Stream, ...)` (the streaming voice owns the stream and closes it on dispose).
-- `IContainerFormat.HasWeakSignature` (default interface member, false); `Mp3Format` sets it true.
 
 ## [1.5.1] - 2026-11-01
 

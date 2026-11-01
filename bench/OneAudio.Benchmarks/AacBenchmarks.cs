@@ -57,3 +57,44 @@ public class AacDecodeBenchmark
         return frames;
     }
 }
+
+/// <summary>
+/// Streaming HE-AAC decode (SBR, and SBR with parametric stereo) of a whole ISO/IEC 14496-26 conformance stream to interleaved
+/// float. No HE-AAC encoder is available to make files, so the streams come from the fetched conformance set
+/// (<c>ONEAUDIO_CORPUS</c>, see tools/fetch-aac-conformance.sh). Speed as a multiple of real time is the stream's duration at
+/// its output rate divided by the mean time; the allocation column covers opening the file and the whole decode.
+/// </summary>
+[MemoryDiagnoser]
+public class HeAacDecodeBenchmark
+{
+    private readonly AudioCodecRegistry _registry = new AudioCodecRegistry().AddMp4().AddAac();
+    private byte[] _file = [];
+    private float[] _block = [];
+
+    /// <summary>Conformance stream: stereo SBR at 44.1 kHz, mono SBR at 48 kHz, mono with parametric stereo at 32 kHz.</summary>
+    [Params("al_sbr_e_44_2", "al_sbr_e_48_1", "al_sbr_ps_06_new")]
+    public string Stream { get; set; } = "";
+
+    /// <summary>Audio duration of the file in seconds.</summary>
+    public double Seconds { get; private set; }
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        string corpus = Environment.GetEnvironmentVariable("ONEAUDIO_CORPUS") ?? throw new InvalidOperationException("Set ONEAUDIO_CORPUS to the fetched corpus.");
+        _file = File.ReadAllBytes(Path.Combine(corpus, "aac-iso-lc", "mp4", Stream + ".mp4"));
+        using var d = AudioDecoder.Open(new MemoryStream(_file), _registry);
+        _block = new float[4096 * d.Format.Channels];
+        Seconds = (double)d.LengthFrames / d.Format.SampleRate;
+    }
+
+    [Benchmark]
+    public long Decode()
+    {
+        using var decoder = AudioDecoder.Open(new MemoryStream(_file), _registry);
+        long frames = 0;
+        int n;
+        while ((n = decoder.Read(_block)) > 0) frames += n;
+        return frames;
+    }
+}

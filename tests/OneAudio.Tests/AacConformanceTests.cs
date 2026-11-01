@@ -12,16 +12,16 @@ internal static class AacTestEnv
 
     private static string? Dir => Environment.GetEnvironmentVariable("ONEAUDIO_CORPUS") is { Length: > 0 } c ? Path.Combine(c, "aac-iso-lc") : null;
 
-    /// <summary>Stream names from tools/aac-conformance.manifest of one section: "in" (with reference waveforms) or "out" (out of scope).</summary>
+    /// <summary>Stream names from tools/aac-conformance.manifest of one section: LC in scope, out of scope, or HE-AAC.</summary>
     public static List<string> Names(int section)
     {
         var list = new List<string>();
         string manifest = Path.Combine(AppContext.BaseDirectory, "testdata", "aac", "aac-conformance.manifest");
-        int current = 0; // 0 in scope, 1 out of scope, 2 implicit SBR
+        int current = 0; // 0 LC in scope, 1 out of scope, 3 HE-AAC (SBR, parametric stereo)
         foreach (var line in File.ReadAllLines(manifest))
         {
             if (line.StartsWith("# out of scope", StringComparison.Ordinal)) current = 1;
-            else if (line.StartsWith("# implicit SBR", StringComparison.Ordinal)) current = 2;
+            else if (line.StartsWith("# HE-AAC", StringComparison.Ordinal)) current = 3;
             var f = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (f.Length == 4 && f[0] == "mp4" && current == section) list.Add(f[1]);
         }
@@ -234,28 +234,6 @@ public class AacConformanceTests
                 }
             }
         }
-    }
-
-    public static TheoryData<string> Implicit()
-    {
-        var d = new TheoryData<string>();
-        foreach (var n in AacTestEnv.Names(2)) d.Add(n);
-        return d;
-    }
-
-    /// <summary>A plain LC config whose frames carry SBR (and parametric stereo) in fill elements decodes as its core and says so.</summary>
-    [Theory]
-    [MemberData(nameof(Implicit))]
-    public void ImplicitSbrDecodesAsTheCoreAndIsFlagged(string name)
-    {
-        var pcm = AacTestEnv.DecodeAll(AacTestEnv.Mp4(name), out var fmt, out var tools, out long declared);
-        Assert.Equal(declared * fmt.Channels, pcm.Length);
-        Assert.True(declared > 0);
-        Assert.True(tools.HasFlag(AacTools.SbrFill));
-        float peak = 0;
-        foreach (var v in pcm) peak = Math.Max(peak, Math.Abs(v));
-        Assert.InRange(peak, 0.01f, 4f);
-        AacTestEnv.Row($"| {name} | {fmt.SampleRate} | {fmt.Channels} | {tools} | implicit SBR skipped, {declared} frames at the core rate | - | - | decoded |");
     }
 
     [Theory]
