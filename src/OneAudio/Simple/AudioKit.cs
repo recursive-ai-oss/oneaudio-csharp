@@ -61,6 +61,18 @@ public sealed class AudioKit
         return AudioDecoder.Open(stream, Registry, limits, leaveOpen, cancellationToken);
     }
 
+    /// <summary>Opens an audio stream with explicit limits; see <see cref="Open(Stream, bool, AudioLimits?, CancellationToken)"/>.</summary>
+    /// <param name="stream">A readable stream at the start of the audio file. Seekable streams give a seekable decoder.</param>
+    /// <param name="limits">Limits for untrusted input.</param>
+    /// <param name="leaveOpen">When false (default), disposing the decoder disposes the stream.</param>
+    /// <param name="cancellationToken">Observed while scanning headers.</param>
+    /// <returns>A decoder at frame 0.</returns>
+    public IAudioDecoder Open(Stream stream, AudioLimits limits, bool leaveOpen = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(limits);
+        return Open(stream, leaveOpen, limits, cancellationToken);
+    }
+
     /// <summary>
     /// Decodes a whole file into memory as interleaved float, optionally converting the rate and channel count on the way.
     /// Without conversion the samples equal what <see cref="AudioClip.FromDecoder"/> returns over the same decoder.
@@ -117,6 +129,23 @@ public sealed class AudioKit
     }
 
     /// <summary>
+    /// Loads a stream as a clip at the mixer's sample rate and starts a voice for it; see
+    /// <see cref="Play(AudioMixer, string, PlayOptions?, CancellationToken)"/>. The stream is left open.
+    /// </summary>
+    /// <param name="mixer">The mixer.</param>
+    /// <param name="stream">A readable stream at the start of the audio file.</param>
+    /// <param name="options">Gain, pan, loop, bus and so on; defaults when null.</param>
+    /// <param name="cancellationToken">Checked while decoding.</param>
+    /// <returns>The voice, or an invalid handle if the mixer's command queue was full.</returns>
+    public VoiceHandle Play(AudioMixer mixer, Stream stream, PlayOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(mixer);
+        options ??= new PlayOptions();
+        var clip = Load(stream, new LoadOptions { SampleRate = mixer.SampleRate, Limits = options.Limits, MaxFrames = options.MaxClipFrames }, cancellationToken);
+        return mixer.Play(options.ToParams(clip, voiceLoop: true));
+    }
+
+    /// <summary>
     /// Starts a voice that streams a file: a shared background thread decodes ahead into a ring buffer, so memory use is
     /// small however long the file is. The file's own rate is converted by the mixer. Looping needs a seekable file.
     /// Call from a control thread.
@@ -131,7 +160,29 @@ public sealed class AudioKit
     {
         ArgumentNullException.ThrowIfNull(mixer);
         options ??= new PlayOptions();
-        var decoder = Open(path, options.Limits, cancellationToken);
+        return PlayStreamCore(mixer, Open(path, options.Limits, cancellationToken), options);
+    }
+
+    /// <summary>
+    /// Starts a voice that streams from <paramref name="stream"/>; see
+    /// <see cref="PlayStream(AudioMixer, string, PlayOptions?, CancellationToken)"/>. The voice owns the stream: disposing the returned handle
+    /// closes it (if this method throws, the stream stays open). Looping needs a seekable stream.
+    /// </summary>
+    /// <param name="mixer">The mixer.</param>
+    /// <param name="stream">A readable stream at the start of the audio file.</param>
+    /// <param name="options">Gain, pan, loop, bus and so on; defaults when null.</param>
+    /// <param name="cancellationToken">Observed while opening the stream.</param>
+    /// <returns>A handle to dispose when you are done with the sound.</returns>
+    /// <exception cref="ArgumentException"><see cref="PlayOptions.Loop"/> is set and the stream cannot seek.</exception>
+    public StreamingVoice PlayStream(AudioMixer mixer, Stream stream, PlayOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(mixer);
+        options ??= new PlayOptions();
+        return PlayStreamCore(mixer, Open(stream, leaveOpen: false, options.Limits, cancellationToken), options);
+    }
+
+    private static StreamingVoice PlayStreamCore(AudioMixer mixer, IAudioDecoder decoder, PlayOptions options)
+    {
         StreamingSource? source = null;
         try
         {
@@ -206,6 +257,32 @@ public sealed class AudioKit
     public LoudnessResult Measure(string path, bool truePeak = true, CancellationToken cancellationToken = default)
     {
         using var decoder = Open(path, null, cancellationToken);
+        return LoudnessAnalyzer.Measure(decoder, truePeak, cancellationToken);
+    }
+
+    /// <summary>Measures a file with explicit limits; see <see cref="Measure(string, bool, CancellationToken)"/>.</summary>
+    /// <param name="path">File path.</param>
+    /// <param name="limits">Limits for untrusted input.</param>
+    /// <param name="truePeak">Measure the true peak (default true).</param>
+    /// <param name="cancellationToken">Checked between blocks.</param>
+    /// <returns>The measurements.</returns>
+    public LoudnessResult Measure(string path, AudioLimits limits, bool truePeak = true, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(limits);
+        using var decoder = Open(path, limits, cancellationToken);
+        return LoudnessAnalyzer.Measure(decoder, truePeak, cancellationToken);
+    }
+
+    /// <summary>Measures a stream with explicit limits; see <see cref="Measure(string, bool, CancellationToken)"/>. The stream is left open.</summary>
+    /// <param name="stream">Readable stream at the start of the audio file.</param>
+    /// <param name="limits">Limits for untrusted input.</param>
+    /// <param name="truePeak">Measure the true peak (default true).</param>
+    /// <param name="cancellationToken">Checked between blocks.</param>
+    /// <returns>The measurements.</returns>
+    public LoudnessResult Measure(Stream stream, AudioLimits limits, bool truePeak = true, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(limits);
+        using var decoder = Open(stream, leaveOpen: true, limits, cancellationToken);
         return LoudnessAnalyzer.Measure(decoder, truePeak, cancellationToken);
     }
 

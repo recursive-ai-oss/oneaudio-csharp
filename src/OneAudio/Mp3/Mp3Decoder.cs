@@ -14,6 +14,9 @@ public sealed class Mp3Format : IContainerFormat
     public string Name => "MP3";
 
     /// <inheritdoc />
+    public bool HasWeakSignature => true;
+
+    /// <inheritdoc />
     public bool Matches(ReadOnlySpan<byte> head)
     {
         if (Mp3Decoder.IsId3v2Header(head, out _)) return true;

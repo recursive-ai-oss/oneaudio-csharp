@@ -124,7 +124,7 @@ Playback and capture live in a second package that references the core one; the 
 ```csharp
 using OneAudio;
 
-using var mixer = Audio.CreateMixer();                 // 48 kHz stereo
+var mixer = Audio.CreateMixer();                       // 48 kHz stereo
 using var output = Audio.Play(mixer);                  // default device, shared mode, ~20 ms, follows default changes
 mixer.Play(Audio.Load("shot.ogg"));                    // the one-call voice API of the core package
 Console.WriteLine(output.Counters);                    // what the hardware really did

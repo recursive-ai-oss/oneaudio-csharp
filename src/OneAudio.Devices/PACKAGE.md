@@ -5,7 +5,7 @@ Audio device playback and capture for [RecursiveAI.OneAudio](https://www.nuget.o
 ```csharp
 using OneAudio;
 
-using var mixer = Audio.CreateMixer();                 // 48 kHz stereo
+var mixer = Audio.CreateMixer();                       // 48 kHz stereo
 using var output = Audio.Play(mixer);                  // default device, follows default changes
 mixer.Play(Audio.Load("shot.ogg"));
 Console.WriteLine(output.Counters);                    // frames written and played, peak, underruns, losses, reopens
