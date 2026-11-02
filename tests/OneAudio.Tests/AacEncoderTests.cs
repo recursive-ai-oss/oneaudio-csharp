@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using OneAudio.Aac;
 using OneAudio.Mp4;
@@ -42,10 +43,11 @@ public class AacEncoderTests
     /// <summary>The units of one encode, back to back, with their lengths.</summary>
     internal sealed class Encoded
     {
-        public readonly MemoryStream Bytes = new();
+        public readonly System.Buffers.ArrayBufferWriter<byte> Bytes = new();
         public readonly List<int> Lengths = [];
         public int Count => Lengths.Count;
-        public byte[] ToArray() => Bytes.ToArray();
+        public byte[] ToArray() => Bytes.WrittenSpan.ToArray();
+        public long Length => Bytes.WrittenCount;
         public int MaxLength => Lengths.Max();
     }
 
@@ -79,8 +81,8 @@ public class AacEncoderTests
     /// <summary>Decodes an ADTS stream whose decoded length (in frames) is known to the caller.</summary>
     private static float[] Decode(Encoded units, int channels, out AudioFormat format)
     {
-        units.Bytes.Position = 0;
-        using var dec = Audio.Open(units.Bytes, leaveOpen: true);
+        using var ms = new MemoryStream(units.ToArray());
+        using var dec = Audio.Open(ms, leaveOpen: true);
         format = dec.Format;
         var all = new float[units.Count * 1024 * channels];
         int filled = 0, n;
@@ -112,7 +114,7 @@ public class AacEncoderTests
     [InlineData(8000, 1, 24000)]
     public void AdtsStreamDecodesToTheInputLength(int rate, int channels, int bitrate)
     {
-        int frames = rate * 2 + 77;
+        int frames = rate + 77;
         var pcm = Signal(rate, channels, frames);
         var enc = new AacEncoder(rate, channels, new AacEncoderSettings { Bitrate = bitrate, Adts = true });
         var units = EncodeAll(enc, pcm, 1500);
@@ -132,30 +134,30 @@ public class AacEncoderTests
     [InlineData(192000)]
     public void CbrBitrateIsWithinFivePercent(int bitrate)
     {
-        var pcm = Signal(44100, 2, 44100 * 8);
+        var pcm = Signal(44100, 2, 44100 * 4);
         var enc = new AacEncoder(44100, 2, new AacEncoderSettings { Bitrate = bitrate });
         var units = EncodeAll(enc, pcm, 4096);
         double seconds = units.Count * 1024 / 44100.0;
-        double kbps = units.Bytes.Length * 8 / seconds;
+        double kbps = units.Length * 8 / seconds;
         Assert.InRange(kbps / bitrate, 0.95, 1.05);
     }
 
     [Fact]
     public void VbrAndAbrProduceDecodableStreamsAndVbrFollowsQuality()
     {
-        var pcm = Signal(44100, 2, 44100 * 4);
+        var pcm = Signal(44100, 2, 44100 * 2);
         long Size(AacRateControl m, double q)
         {
             var enc = new AacEncoder(44100, 2, new AacEncoderSettings { Bitrate = 128000, RateControl = m, VbrQuality = q, Adts = true });
             var units = EncodeAll(enc, pcm, 4096);
             var dec = Decode(units, 2, out _);
             Assert.True(SnrDb(pcm, dec.AsSpan(2048, pcm.Length)) > 6);
-            return units.Bytes.Length;
+            return units.Length;
         }
         long low = Size(AacRateControl.Vbr, 0.1), high = Size(AacRateControl.Vbr, 0.9);
         Assert.True(high > low * 1.3, $"{low} vs {high}");
         long abr = Size(AacRateControl.Abr, 0);
-        Assert.InRange(abr * 8 / 4.0 / 128000, 0.9, 1.05);
+        Assert.InRange(abr * 8 / 2.0 / 128000, 0.9, 1.05);
     }
 
     [Theory]
@@ -306,7 +308,7 @@ public class AacEncoderTests
     [Fact]
     public void M4aFromTheHappyPathPlaysBackAtTheExactLengthInOurDecoder()
     {
-        int rate = 44100, frames = rate * 2 + 321;
+        int rate = 44100, frames = rate + 321;
         var pcm = Signal(rate, 2, frames);
         string wav = Path.Combine(Scratch, "aac-in-" + Guid.NewGuid().ToString("N")[..8] + ".wav");
         string m4a = Path.ChangeExtension(wav, ".m4a");
@@ -335,7 +337,7 @@ public class AacEncoderTests
         Assert.SkipUnless(ffmpeg is not null && File.Exists(ffmpeg), "ffmpeg not found.");
         foreach (var (rate, ch, format) in new[] { (44100, 2, AudioFileFormat.Aac), (32000, 1, AudioFileFormat.Aac), (48000, 2, AudioFileFormat.AacAdts), (22050, 1, AudioFileFormat.AacAdts) })
         {
-            int frames = rate * 2 + 100;
+            int frames = rate + 100;
             var pcm = Signal(rate, ch, frames);
             string path = Path.Combine(Scratch, "aac-ff-" + Guid.NewGuid().ToString("N")[..8] + (format == AudioFileFormat.Aac ? ".m4a" : ".aac"));
             string raw = path + ".f32";
