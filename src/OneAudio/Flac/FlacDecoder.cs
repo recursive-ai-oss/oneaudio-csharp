@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Security.Cryptography;
 using OneAudio.Ogg;
 using System.Text;
 
@@ -845,7 +844,7 @@ public sealed class FlacDecoder : IAudioDecoder
         try
         {
             SeekCore(0);
-            using var md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+            var md5 = new Md5();
             int bytes = (_si.BitsPerSample + 7) / 8;
             int ch = _si.Channels;
             var chunk = new byte[4096 * bytes * ch];
@@ -864,14 +863,16 @@ public sealed class FlacDecoder : IAudioDecoder
                             int v = _fd.Channels[c][pos + i];
                             for (int b = 0; b < bytes; b++) chunk[o++] = (byte)(v >> (8 * b));
                         }
-                    md5.AppendData(chunk, 0, o);
+                    md5.Append(chunk.AsSpan(0, o));
                     pos += take;
                 }
                 count += _blockLen;
                 if (!NextFrame()) break;
             }
             if (_si.TotalSamples > 0 && count != _si.TotalSamples) return false;
-            return md5.GetHashAndReset().AsSpan().SequenceEqual(_si.Md5);
+            Span<byte> digest = stackalloc byte[16];
+            md5.GetCurrentHash(digest);
+            return digest.SequenceEqual(_si.Md5);
         }
         finally
         {

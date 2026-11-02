@@ -14,7 +14,7 @@ public sealed class AudioCodecRegistry
     /// <summary>How many leading bytes <see cref="IContainerFormat.Matches"/> may inspect. 512.</summary>
     public const int SniffBytes = 512;
 
-    /// <summary>Registers a container format. Earlier registrations are tried first.</summary>
+    /// <summary>Registers a container format. <see cref="Detect"/> asks formats with a start-of-file signature first, then weak-signature ones (raw MP3); registration order only breaks ties within each group.</summary>
     /// <param name="format">The format.</param>
     /// <returns>This registry, for chaining.</returns>
     public AudioCodecRegistry Add(IContainerFormat format)
