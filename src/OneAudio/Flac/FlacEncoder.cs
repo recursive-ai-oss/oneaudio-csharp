@@ -446,7 +446,7 @@ public sealed class FlacEncoder : IDisposable
 
     // ---- settings -> plan -------------------------------------------------------------------------------------------
 
-    private static FlacEncoderPlan BuildPlan(AudioFormat format, FlacEncoderSettings s)
+    internal static FlacEncoderPlan BuildPlan(AudioFormat format, FlacEncoderSettings s)
     {
         if (format.SampleRate < 1 || format.SampleRate > 1_048_575) throw new ArgumentException("Sample rate must be 1 to 1048575 Hz.", nameof(format));
         if (format.Channels < 1 || format.Channels > 8) throw new ArgumentException("FLAC holds 1 to 8 channels.", nameof(format));

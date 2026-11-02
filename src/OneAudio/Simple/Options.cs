@@ -1,6 +1,7 @@
 using OneAudio.Loudness;
 using OneAudio.Flac;
 using OneAudio.Opus;
+using OneAudio.Aac;
 
 namespace OneAudio;
 
@@ -13,6 +14,14 @@ public enum AudioFileFormat
     Flac = 1,
     /// <summary>Opus in an Ogg container (RFC 7845). File extensions <c>.opus</c>, <c>.ogg</c> and <c>.oga</c>; it is the only Ogg format the library writes.</summary>
     Opus = 2,
+    /// <summary>
+    /// AAC-LC in an MP4 container (ISO/IEC 14496-12), the audio-only <c>.m4a</c> that Safari and other players accept. File extensions
+    /// <c>.m4a</c>, <c>.mp4</c> and <c>.m4b</c>. Mono or stereo, 8000 to 48000 Hz; the file carries an edit list so players trim the
+    /// encoder delay and padding.
+    /// </summary>
+    Aac = 3,
+    /// <summary>AAC-LC as a bare ADTS stream (ISO/IEC 14496-3 1.A.2). File extension <c>.aac</c>. Same limits as <see cref="Aac"/>.</summary>
+    AacAdts = 4,
 }
 
 /// <summary>Sample-rate and channel conversion shared by the happy-path calls.</summary>
@@ -70,6 +79,14 @@ public sealed record TranscodeOptions : ConversionOptions
     /// always taken from the converted source; sources not at 48 kHz are resampled by the writer.
     /// </summary>
     public OpusFileWriterSettings? Opus { get; init; }
+
+    /// <summary>
+    /// AAC-LC settings for <see cref="AudioFileFormat.Aac"/> and <see cref="AudioFileFormat.AacAdts"/> (default constant bit rate at 64 kbit/s per channel; the
+    /// <see cref="AacEncoderSettings.Adts"/> flag is set by the format). The source must be mono or stereo at one of the AAC sampling
+    /// rates from 8000 to 48000 Hz; use <see cref="ConversionOptions.SampleRate"/> and <see cref="ConversionOptions.Channels"/> to
+    /// convert first.
+    /// </summary>
+    public AacEncoderSettings? Aac { get; init; }
 }
 
 /// <summary>What <see cref="AudioKit.Transcode(string, string, TranscodeOptions?, CancellationToken)"/> wrote.</summary>

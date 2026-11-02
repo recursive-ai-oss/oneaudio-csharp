@@ -1,6 +1,8 @@
 using OneAudio.Loudness;
 using OneAudio.Flac;
 using OneAudio.Opus;
+using OneAudio.Aac;
+using OneAudio.Mp4;
 
 namespace OneAudio;
 
@@ -12,7 +14,7 @@ namespace OneAudio;
 /// var kit = new AudioKit(new AudioCodecRegistry().AddWav());   // only WAV reaches the published app
 /// var clip = kit.Load("hit.wav");
 /// </code>
-/// The calls that write files also link the WAV, FLAC and Opus encoders. A kit is immutable and safe to share between threads
+/// The calls that write files also link the WAV, FLAC, Opus and AAC-LC encoders. A kit is immutable and safe to share between threads
 /// (the registry must not be changed after construction). Failures raise the library's typed exceptions
 /// (<see cref="OneAudioException"/> and its subclasses), argument exceptions, I/O exceptions and
 /// <see cref="OperationCanceledException"/>; nothing is swallowed.
@@ -202,9 +204,9 @@ public sealed class AudioKit
     // ------------------------------------------------------------------ transcode
 
     /// <summary>
-    /// Converts an audio file to WAV, FLAC or Ogg Opus, resampling and remixing on the way if asked. The output format
+    /// Converts an audio file to WAV, FLAC, Ogg Opus, AAC-LC in MP4 (<c>.m4a</c>) or ADTS (<c>.aac</c>), resampling and remixing on the way if asked. The output format
     /// comes from <see cref="TranscodeOptions.Format"/> or else the output file's extension (<c>.wav</c>, <c>.flac</c>,
-    /// <c>.opus</c>/<c>.ogg</c>). Streams block by block, so memory use does not depend on the length. WAV and FLAC from a lossless integer
+    /// <c>.opus</c>/<c>.ogg</c>, <c>.m4a</c>/<c>.mp4</c>, <c>.aac</c>). Streams block by block, so memory use does not depend on the length. WAV and FLAC from a lossless integer
     /// source are bit-exact when nothing is converted; the output file is deleted if the conversion fails.
     /// </summary>
     /// <param name="inputPath">Source file.</param>
@@ -392,10 +394,65 @@ public sealed class AudioKit
                 writer.Finish();
                 break;
             }
+            case AudioFileFormat.Aac:
+            case AudioFileFormat.AacAdts:
+                frames = EncodeAac(source, format == AudioFileFormat.AacAdts, options.Aac, output, ct);
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(format));
         }
         return new TranscodeResult(format, new AudioFormat(fmt.SampleRate, fmt.Channels, fmt.ChannelMask), frames);
+    }
+
+    private static long EncodeAac(IAudioDecoder source, bool adts, AacEncoderSettings? settings, Stream output, CancellationToken ct)
+    {
+        var fmt = source.Format;
+        if (fmt.Channels > 2)
+            throw new ArgumentException($"AAC-LC output takes one or two channels, not {fmt.Channels}; set TranscodeOptions.Channels.", nameof(source));
+        if (AacEncTables.RateIndex(fmt.SampleRate) < 0)
+            throw new ArgumentException($"AAC-LC output needs a sampling rate from 8000 to 48000 Hz (8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000), not {fmt.SampleRate}; set TranscodeOptions.SampleRate.", nameof(source));
+        settings = (settings ?? new AacEncoderSettings()) with { Adts = adts };
+        var enc = new AacEncoder(fmt.SampleRate, fmt.Channels, settings);
+        var buffer = new float[1024 * fmt.Channels];
+
+        if (adts)
+        {
+            Pump(source, enc, buffer, p => output.Write(p.Data.Span), ct);
+            return enc.FramesWritten;
+        }
+
+        // An MP4 needs a seekable stream to patch its data box; buffer in memory when the caller's stream cannot seek.
+        var target = output.CanSeek ? output : new MemoryStream();
+        using (var writer = Mp4AudioWriter.CreateAac(target, fmt.SampleRate, fmt.Channels, enc.AudioSpecificConfig, AacEncoder.PrimingFrames, leaveOpen: true))
+        {
+            Pump(source, enc, buffer, p => writer.AddSample(p.Data.Span, p.Duration), ct);
+            writer.Finish(enc.FramesWritten);
+        }
+        if (!ReferenceEquals(target, output))
+        {
+            target.Position = 0;
+            target.CopyTo(output);
+        }
+        return enc.FramesWritten;
+    }
+
+    private static void Pump(IAudioDecoder source, AacEncoder enc, float[] buffer, Action<AacPacket> sink, CancellationToken ct)
+    {
+        int ch = enc.Channels;
+        int n;
+        while ((n = source.Read(buffer)) > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            var span = buffer.AsSpan(0, n * ch);
+            while (span.Length > 0)
+            {
+                int taken = enc.Write(span);
+                span = span[(taken * ch)..];
+                while (enc.TryReadPacket(out var p)) sink(p);
+            }
+        }
+        enc.Finish();
+        while (enc.TryReadPacket(out var p)) sink(p);
     }
 
     private static AudioFileFormat FormatFromExtension(string path) => Path.GetExtension(path).ToLowerInvariant() switch
@@ -403,7 +460,9 @@ public sealed class AudioKit
         ".wav" or ".wave" => AudioFileFormat.Wav,
         ".flac" => AudioFileFormat.Flac,
         ".opus" or ".ogg" or ".oga" => AudioFileFormat.Opus,
-        var ext => throw new ArgumentException($"Cannot tell the output format from the extension '{ext}'; use .wav, .flac or .opus, or set TranscodeOptions.Format.", nameof(path)),
+        ".m4a" or ".mp4" or ".m4b" => AudioFileFormat.Aac,
+        ".aac" => AudioFileFormat.AacAdts,
+        var ext => throw new ArgumentException($"Cannot tell the output format from the extension '{ext}'; use .wav, .flac, .opus, .m4a or .aac, or set TranscodeOptions.Format.", nameof(path)),
     };
 
     private static void CheckDistinct(string inputPath, string outputPath)

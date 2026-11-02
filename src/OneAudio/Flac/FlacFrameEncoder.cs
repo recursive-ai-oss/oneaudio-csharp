@@ -114,6 +114,8 @@ internal sealed class FlacFrameEncoder
 
     /// <summary>The bytes of the last frame produced by <see cref="Encode"/>.</summary>
     public ReadOnlySpan<byte> Frame => _frame.AsSpan(0, _frameLength);
+    /// <summary>The same bytes as <see cref="Frame"/>, as memory.</summary>
+    public ReadOnlyMemory<byte> FrameMemory => _frame.AsMemory(0, _frameLength);
     private int _frameLength;
 
     /// <summary>Encodes <paramref name="n"/> samples of every channel as frame number <paramref name="frameNumber"/>.</summary>

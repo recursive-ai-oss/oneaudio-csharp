@@ -28,7 +28,7 @@ using var music = mixer.PlayStream("music.ogg", loop: true);           // long s
 
 // On the audio device thread (no allocation, no locks):   mixer.Render(deviceBuffer);
 
-Audio.Transcode("take.wav", "take.flac");                  // format from the extension: .wav, .flac, .opus
+Audio.Transcode("take.wav", "take.flac");                  // format from the extension: .wav, .flac, .opus, .m4a (AAC-LC), .aac
 var loudness = Audio.Measure("take.flac");                 // loudness.IntegratedLufs, .LoudnessRange, .TruePeakDbtp
 Audio.Normalize("take.wav", "take-14.wav");                // -14 LUFS, true peak at most -1 dBTP
 ```
