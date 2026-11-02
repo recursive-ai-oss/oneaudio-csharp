@@ -5,7 +5,9 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
-Packet-level encoders for building audio into other containers, and AAC-LC encoding. The API changes are additive.
+## [1.7.0] - 2026-11-02
+
+Packet-level encoders for building audio into other containers, and AAC-LC encoding. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.
 
 ### Added
 
