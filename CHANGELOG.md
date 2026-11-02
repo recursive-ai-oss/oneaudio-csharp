@@ -14,6 +14,11 @@ Packet-level encoders for building audio into other containers, and AAC-LC encod
 - **`Mp4AudioWriter`**: a single-track audio MP4 writer (`ftyp`, `mdat`, `moov` with `esds` or `dfLa`, `stts`/`stsz`/`stsc`/`stco`; for AAC an edit list and an `iTunSMPB` tag). The MP4 reader stays as it was.
 - **Happy path:** `Audio.Transcode` and `AudioKit.Transcode` write `.m4a`/`.mp4` (`AudioFileFormat.Aac`) and `.aac` (`AudioFileFormat.AacAdts`); `TranscodeOptions.Aac` holds the encoder settings. A source that AAC cannot take (more than two channels, or a rate outside 8000 to 48000 Hz) gets an `ArgumentException` that names the option to set. FLAC output already existed.
 
+### Changed
+
+- **`Audio.Transcode` to `.mp4` now writes AAC** (`.m4a`, `.mp4` and `.m4b` all mean `AudioFileFormat.Aac`); `.mp4` used to be an unsupported output extension.
+- `AacDecoder` documentation: noise-substituted bands match other decoders in energy, not sample by sample.
+
 ## [1.6.1] - 2026-11-01
 
 Fixes and clarifications for HE-AAC decoding. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.
