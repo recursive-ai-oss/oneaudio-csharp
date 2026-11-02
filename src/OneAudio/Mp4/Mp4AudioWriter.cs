@@ -7,15 +7,15 @@ namespace OneAudio.Mp4;
 /// Writes a single-audio-track MP4 / M4A file (ISO/IEC 14496-12, with the AAC sample description of ISO/IEC 14496-14 and the
 /// FLAC-in-ISOBMFF sample description): <c>ftyp</c>, <c>moov</c> with the track's sample tables, and the media data.
 /// Samples are written to the stream as they arrive; only their sizes and durations are kept in memory (about 4 bytes per sample),
-/// and the output stream must be seekable to patch the size of the data box. By default <c>moov</c> follows the media data;
-/// <see cref="FastStart"/> moves it in front.
+/// and the output stream must be seekable to patch the size of the data box. By default <c>moov</c> is moved in front of the media
+/// data when the stream is also readable (<see cref="FastStart"/>); otherwise, or with FastStart false, it follows the data.
 /// </summary>
 /// <remarks>
 /// <para>For AAC the track gets an edit list that skips <c>primingFrames</c> frames at the start and plays <c>validFrames</c> frames
 /// (movie and media time scales both equal the sampling rate), which is what players use for gapless playback and what
 /// <see cref="Mp4PacketSource"/> reads back as <see cref="IPacketSource.PrimingFrames"/> and the length. FLAC needs no edit list.</para>
 /// <para>All samples are in one chunk; chunk offsets switch to 64 bits (<c>co64</c>) when they pass 4 GiB. Progressive playback
-/// over HTTP needs <c>moov</c> before the media data: set <see cref="FastStart"/> for that.</para>
+/// over HTTP needs <c>moov</c> before the media data, which <see cref="FastStart"/> (on by default) provides.</para>
 /// Not thread-safe.
 /// </remarks>
 public sealed class Mp4AudioWriter : IDisposable
@@ -37,7 +37,7 @@ public sealed class Mp4AudioWriter : IDisposable
     private int _runs;
     private long _totalTicks;
     private int _maxSample;
-    private bool _finished, _disposed, _fastStart;
+    private bool _finished, _disposed, _fastStart = true;
 
     private Mp4AudioWriter(Stream output, bool leaveOpen, Kind kind, int rate, int channels, int bits, byte[] asc, int priming)
     {
@@ -86,11 +86,14 @@ public sealed class Mp4AudioWriter : IDisposable
     }
 
     /// <summary>
-    /// Put <c>moov</c> before the media data (so a player can start while the file is still downloading). Default false. Set it
-    /// before <see cref="Finish"/>. <see cref="Finish"/> then shifts the media data forward by the size of <c>moov</c> inside the
+    /// Put <c>moov</c> before the media data (so a player can start while the file is still downloading). Default true, the same as
+    /// <c>TranscodeOptions.FastStart</c>: a file that plays while it downloads is what almost every use wants. Set it
+    /// before <see cref="Finish"/>; false keeps <c>moov</c> last and costs no extra pass. <see cref="Finish"/> shifts the media data forward by the size of <c>moov</c> inside the
     /// stream, in 1 MiB steps from the end, which costs one extra pass of reads and writes over the file and no extra memory;
     /// the stream must therefore be readable as well as writable and seekable. Offsets are written as <c>co64</c> when the data
     /// ends up past 4 GiB.
+    /// On a stream that cannot be read, the default (never set by the caller) quietly falls back to <c>moov</c> last, and the
+    /// getter still reads true; asking for true explicitly on such a stream throws, so a request is never ignored.
     /// </summary>
     /// <exception cref="InvalidOperationException">Set after <see cref="Finish"/>.</exception>
     /// <exception cref="ArgumentException">Set to true on a stream that cannot be read.</exception>
@@ -172,11 +175,13 @@ public sealed class Mp4AudioWriter : IDisposable
         if (_kind == Kind.Flac && flacStreamInfoBlock.Length != 38) throw new ArgumentException("A FLAC track needs the 38-byte STREAMINFO block.", nameof(flacStreamInfoBlock));
         ArgumentOutOfRangeException.ThrowIfNegative(validFrames);
         _finished = true;
+        // Fast start needs a readable stream; on a write-only one the default falls back to moov last.
+        bool fast = _fastStart && _out.CanRead;
 
         long end = _out.Position;
         long dataOffset = _mdatStart + 16 - _origin;
         byte[] moov;
-        if (!_fastStart) moov = BuildMoov(validFrames, flacStreamInfoBlock, dataOffset);
+        if (!fast) moov = BuildMoov(validFrames, flacStreamInfoBlock, dataOffset);
         else
         {
             // The size of moov depends on whether the chunk offset needs 64 bits, and the offset depends on the size of moov, so
@@ -192,12 +197,12 @@ public sealed class Mp4AudioWriter : IDisposable
             ShiftForward(_mdatStart, end, moov.Length);
         }
 
-        long mdat = _mdatStart + (_fastStart ? moov.Length : 0);
+        long mdat = _mdatStart + (fast ? moov.Length : 0);
         _out.Position = mdat + 8;
         Span<byte> size = stackalloc byte[8];
         BinaryPrimitives.WriteUInt64BigEndian(size, 16UL + (ulong)_dataBytes);
         _out.Write(size);
-        if (_fastStart)
+        if (fast)
         {
             _out.Position = _mdatStart;
             _out.Write(moov);

@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Security.Cryptography;
 
 namespace OneAudio.Flac;
 
@@ -44,7 +43,7 @@ public sealed class FlacPacketEncoder : IDisposable
     private readonly int[][] _block;
     private readonly int[] _chunk;
     private readonly byte[] _md5Buf;
-    private readonly IncrementalHash _md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+    private readonly Md5 _md5 = new();
     private readonly int _bps, _channels, _rate, _blockSize, _bytesPerSample;
     private readonly bool _dither;
     private readonly long _declaredTotal;
@@ -168,7 +167,7 @@ public sealed class FlacPacketEncoder : IDisposable
                 foreach (int v in ints) { buf[k] = (byte)v; buf[k + 1] = (byte)(v >> 8); buf[k + 2] = (byte)(v >> 16); buf[k + 3] = (byte)(v >> 24); k += 4; }
                 break;
         }
-        _md5.AppendData(buf.AsSpan(0, k));
+        _md5.Append(buf.AsSpan(0, k));
 
         int frames = ints.Length / _channels;
         for (int c = 0; c < _channels; c++)
@@ -287,11 +286,10 @@ public sealed class FlacPacketEncoder : IDisposable
         d[2] = (byte)v;
     }
 
-    /// <summary>Releases the MD5 state. The encoder is unusable afterwards.</summary>
+    /// <summary>Releases the encoder. It is unusable afterwards.</summary>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        _md5.Dispose();
     }
 }

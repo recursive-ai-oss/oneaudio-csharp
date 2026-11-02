@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices.JavaScript;
 using System.Text;
 using OneAudio;
+using OneAudio.Flac;
 using OneAudio.Devices;
 
 namespace OneAudio.WasmAllocCheck;
@@ -26,10 +27,60 @@ public static partial class Check
             bad += RunOne(log);
         }
 
+        bad += RunFlac(log);
+
         log.Append(bad == 0 ? "VERDICT PASS" : "VERDICT FAIL " + bad + " steps allocated").Append('\n');
         log.Append("runtime ").Append(System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier).Append(' ')
             .Append(Environment.Version).Append('\n');
         return log.ToString();
+    }
+
+    /// <summary>
+    /// Encodes a short stereo 16-bit signal with FlacEncoder and with FlacPacketEncoder, then decodes both and checks the STREAMINFO
+    /// MD5 (the BCL's MD5 is not available on this platform, so any use of it throws). Returns 1 on failure.
+    /// </summary>
+    private static int RunFlac(StringBuilder log)
+    {
+        try
+        {
+            var format = new AudioFormat(44100, 2, ChannelMask.None, NativeSampleType.PcmSigned16, 16);
+            var pcm = new int[2 * 10000];
+            for (int i = 0; i < pcm.Length; i++) pcm[i] = (int)(9000 * Math.Sin(i * 0.013) + 3000 * Math.Sin(i * 0.31));
+
+            var ms = new MemoryStream();
+            using (var enc = new FlacEncoder(ms, format, leaveOpen: true)) { enc.WriteInteger(pcm); enc.Finish(); }
+            ms.Position = 0;
+            var dec = FlacDecoder.Open(ms);
+            log.Append("flac encoder: ").Append(ms.Length).Append(" bytes, md5 ").Append(dec.VerifyMd5()).Append('\n');
+            if (dec.VerifyMd5() != true) return 1;
+
+            var file = new MemoryStream();
+            using (var enc = new FlacPacketEncoder(format))
+            {
+                var packets = new List<byte[]>();
+                for (int pos = 0; pos < pcm.Length;)
+                {
+                    int n = enc.WriteInteger(pcm.AsSpan(pos)) * 2;
+                    pos += n;
+                    if (enc.TryReadPacket(out var p)) packets.Add(p.Data.ToArray());
+                }
+                enc.Finish();
+                if (enc.TryReadPacket(out var last)) packets.Add(last.Data.ToArray());
+                file.Write("fLaC"u8);
+                file.Write(enc.GetStreamInfoBlock());
+                foreach (var p in packets) file.Write(p);
+            }
+            file.Position = 0;
+            var dec2 = FlacDecoder.Open(file);
+            bool? ok = dec2.VerifyMd5();
+            log.Append("flac packet encoder: ").Append(file.Length).Append(" bytes, md5 ").Append(ok).Append('\n');
+            return ok == true ? 0 : 1;
+        }
+        catch (Exception e)
+        {
+            log.Append("flac FAILED: ").Append(e.GetType().Name).Append(": ").Append(e.Message).Append('\n');
+            return 1;
+        }
     }
 
     private static AudioClip Tone(int rate, int channels, int frames)

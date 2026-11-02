@@ -425,7 +425,7 @@ public sealed class AudioKit
         var target = output.CanSeek ? output : new MemoryStream();
         using (var writer = Mp4AudioWriter.CreateAac(target, fmt.SampleRate, fmt.Channels, enc.AudioSpecificConfig, AacEncoder.PrimingFrames, leaveOpen: true))
         {
-            if (fastStart && target.CanRead) writer.FastStart = true;
+            if (!fastStart) writer.FastStart = false; // the writer defaults to true and falls back by itself on an unreadable stream
             Pump(source, enc, buffer, p => writer.AddSample(p.Data.Span, p.Duration), ct);
             writer.Finish(enc.FramesWritten);
         }

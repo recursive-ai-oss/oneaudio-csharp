@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Security.Cryptography;
 using System.Text;
 using OneAudio.Kernels;
 
@@ -39,7 +38,7 @@ public sealed class FlacEncoder : IDisposable
     private readonly int _blockSize;
     private readonly int[] _chunk;
     private readonly byte[] _md5Buf;
-    private readonly IncrementalHash _md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+    private readonly Md5 _md5 = new();
     private readonly long _seekTableOffset; // from _origin; -1 when there is none
     private readonly int _seekCapacity;
     private readonly long[] _seekSample, _seekByte;
@@ -193,7 +192,7 @@ public sealed class FlacEncoder : IDisposable
                 foreach (int v in ints) { buf[k] = (byte)v; buf[k + 1] = (byte)(v >> 8); buf[k + 2] = (byte)(v >> 16); buf[k + 3] = (byte)(v >> 24); k += 4; }
                 break;
         }
-        _md5.AppendData(buf.AsSpan(0, k));
+        _md5.Append(buf.AsSpan(0, k));
 
         int frames = ints.Length / _channels;
         int pos = 0;
@@ -308,7 +307,6 @@ public sealed class FlacEncoder : IDisposable
         finally
         {
             _disposed = true;
-            _md5.Dispose();
             if (!_leaveOpen) _out.Dispose();
         }
     }

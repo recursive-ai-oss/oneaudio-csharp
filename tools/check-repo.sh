@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Repository rules that the compiler does not enforce:
 #  - the libraries reference nothing but the base class library (no PackageReference in src/);
+#  - the libraries do not use System.Security.Cryptography (not available on browser-wasm);
 #  - unsafe code, Unsafe.*, MemoryMarshal, fixed and pointer stackalloc live only in src/OneAudio/Kernels/
 #    and src/OneAudio.Devices/Interop/.
 set -euo pipefail
@@ -9,6 +10,12 @@ status=0
 
 if grep -rn 'PackageReference' src --include='*.csproj'; then
   echo "error: a library project has a PackageReference" >&2
+  status=1
+fi
+
+# System.Security.Cryptography is unavailable on browser-wasm; hashes are managed code (see Flac/Md5.cs).
+if grep -rn 'System.Security.Cryptography' src --include='*.cs'; then
+  echo "error: a library source uses System.Security.Cryptography" >&2
   status=1
 fi
 

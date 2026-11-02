@@ -5,6 +5,19 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-11-02
+
+FLAC now works on browser-wasm, plus documentation and default fixes. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.
+
+### Fixed
+
+- **FLAC encoding and MD5 verification threw on browser-wasm**, where `System.Security.Cryptography` MD5 is not available. `FlacEncoder`, `FlacPacketEncoder` and `FlacDecoder.VerifyMd5` now use a small managed MD5 (RFC 1321) on every platform: one code path, the same bytes everywhere, no allocation per block. Output is byte-identical to before. The browser check (`tools/wasm-alloc-check`) now also encodes and verifies a FLAC file.
+- **Documentation.** `AudioCodecRegistry.Add` no longer says earlier registrations are tried first: formats with a start-of-file signature are asked first, then weak-signature ones (raw MP3), and registration order only breaks ties. The open-probe cost for AAC now reads: HE-AAC about 0.1 to 0.6 ms (SBR shows in the first frames), AAC-LC without SBR about 8 ms per 100 kB (all 256 units are read). `TranscodeResult.Input.BitsPerSample` is documented as 0 for lossy sources (Ogg Vorbis, Opus, MP3, AAC).
+
+### Changed
+
+- **`Mp4AudioWriter.FastStart` now defaults to true**, matching `TranscodeOptions.FastStart`: a file that plays while it downloads is what nearly every caller wants, and the cost is one extra pass at `Finish`. Set it false to keep `moov` last as in 1.7.0 and 1.7.1. On a stream that cannot be read the default falls back to `moov` last without an exception; setting `FastStart = true` explicitly on such a stream still throws `ArgumentException`.
+
 ## [1.7.1] - 2026-11-02
 
 Fixes to the AAC encoder, the MP4 writer and the transcode result. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.
