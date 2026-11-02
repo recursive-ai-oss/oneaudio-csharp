@@ -68,7 +68,7 @@ internal sealed partial class AacEncCore
     // Rate control.
     private readonly double _avgBits;
     private double _reservoir, _reservoirMax, _peMean;
-    private readonly bool _vbr;
+    private readonly bool _vbr, _abr;
     private readonly int _maxFrameBits;
 
     public readonly int Bandwidth;
@@ -117,10 +117,11 @@ internal sealed partial class AacEncCore
         }
 
         _vbr = settings.RateControl == AacRateControl.Vbr;
+        _abr = settings.RateControl == AacRateControl.Abr;
         _avgBits = settings.Bitrate * (double)M / rate;
         _maxFrameBits = 6144 * channels - 64;
         _reservoirMax = settings.RateControl == AacRateControl.Abr
-            ? Math.Min(_maxFrameBits - _avgBits, 8 * _avgBits)
+            ? 8 * _avgBits // not bounded by a decoder buffer: ABR files carry no fixed-rate promise (compare CBR below)
             : Math.Max(0, _maxFrameBits - _avgBits);
         _reservoir = 0;
         _peMean = -1;

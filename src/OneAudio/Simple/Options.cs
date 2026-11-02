@@ -87,11 +87,19 @@ public sealed record TranscodeOptions : ConversionOptions
     /// convert first.
     /// </summary>
     public AacEncoderSettings? Aac { get; init; }
+
+    /// <summary>
+    /// For <see cref="AudioFileFormat.Aac"/> (MP4/M4A): write the <c>moov</c> box before the media data so the file plays while it
+    /// downloads (default true). The media data is moved once inside the output, which costs one extra pass over a file about the
+    /// size of the output and no extra memory. Ignored (the box stays at the end) when the output stream is seekable but cannot be
+    /// read.
+    /// </summary>
+    public bool FastStart { get; init; } = true;
 }
 
 /// <summary>What <see cref="AudioKit.Transcode(string, string, TranscodeOptions?, CancellationToken)"/> wrote.</summary>
 /// <param name="Format">The file format written.</param>
-/// <param name="Input">Sample rate and channels of the audio handed to the encoder (after any conversion).</param>
+/// <param name="Input">The audio handed to the encoder: sample rate, channels and layout after any conversion, with the source's own sample type and bit depth (<see cref="AudioFormat.NativeType"/>, <see cref="AudioFormat.BitsPerSample"/>), never the output format's.</param>
 /// <param name="Frames">Frames handed to the encoder, at <c>Input.SampleRate</c>.</param>
 public readonly record struct TranscodeResult(AudioFileFormat Format, AudioFormat Input, long Frames);
 

@@ -29,11 +29,17 @@ namespace OneAudio.Aac;
 /// </para>
 /// <para>
 /// <b>Method.</b> Kaiser-Bessel-derived windows; long and eight-short blocks with start and stop windows chosen from a
-/// high-frequency attack detector; per-band mid/side; a threshold model of the kind in 3GPP TS 26.403 (band energy at a fixed
+/// high-frequency attack detector; per-band mid/side; a threshold model of the kind in the floating-point reference encoder of 3GPP TS 26.410 (band energy at a fixed
 /// signal-to-mask ratio, Bark spreading, absolute threshold, pre-echo limiting); a rate loop that raises the allowed noise in
 /// the fourth-root domain of the thresholds until the block fits its budget; scalefactor search against the allowed noise;
-/// optimal section partition over codebooks 1 to 11. No TNS, intensity stereo, PNS, LTP or SBR. The block's bits are exact:
-/// nothing is estimated.
+/// optimal section partition over codebooks 1 to 11; perceptual noise substitution (ISO/IEC 14496-3 4.5.2.3.4) for bands above
+/// 4 kHz that would otherwise decode as holes (on by default, see <see cref="AacEncoderSettings.NoiseSubstitution"/>). No TNS,
+/// intensity stereo, LTP or SBR. The block's bits are exact: nothing is estimated.
+/// </para>
+/// <para>
+/// <b>Decoder agreement.</b> Decoders agree to within rounding (about 1e-7 of full scale) everywhere except in noise-substituted
+/// bands, which every decoder fills with its own noise of the coded energy: those bands match in energy, not sample by sample.
+/// Set <see cref="AacEncoderSettings.NoiseSubstitution"/> to false for output that decodes identically everywhere.
 /// </para>
 /// After construction no allocation happens per block. Output is deterministic for identical input and settings on a platform.
 /// Channels and rate are fixed at construction; feed one encoder one stream. Instances are not thread-safe.

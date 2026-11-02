@@ -161,6 +161,35 @@ public class AacEncoderTests
     }
 
     [Theory]
+    [InlineData(2)]
+    [InlineData(1)]
+    public void AbrFollowsTheMaterialWhereCbrDoesNotAndBothHitTheTarget(int channels)
+    {
+        int rate = 44100, frames = rate * 8;
+        // Easy first half (a few steady tones), hard second half (dense noise bursts over a chord).
+        var rng = new Random(7);
+        var pcm = new float[frames * channels];
+        for (int i = 0; i < frames; i++)
+        {
+            double t = i / (double)rate;
+            double v = 0.2 * Math.Sin(2 * Math.PI * 440 * t) + 0.1 * Math.Sin(2 * Math.PI * 660 * t);
+            if (i >= frames / 2) v += 0.4 * (rng.NextDouble() - 0.5) * (((i / 4410) & 1) == 0 ? 1.0 : 0.15);
+            for (int c = 0; c < channels; c++) pcm[i * channels + c] = (float)v;
+        }
+        int bitrate = 64000 * channels;
+        Encoded Run(AacRateControl m) => EncodeAll(new AacEncoder(rate, channels, new AacEncoderSettings { Bitrate = bitrate, RateControl = m }), pcm, 4096);
+        var cbr = Run(AacRateControl.Cbr);
+        var abr = Run(AacRateControl.Abr);
+        double Rate(Encoded e) => e.Length * 8 / (e.Count * 1024.0 / rate) / bitrate;
+        double Spread(Encoded e) { double mean = e.Lengths.Average(); return Math.Sqrt(e.Lengths.Average(l => (l - mean) * (l - mean))) / mean; }
+        Assert.InRange(Rate(cbr), 0.95, 1.05);
+        Assert.InRange(Rate(abr), 0.95, 1.05);
+        Assert.False(cbr.Bytes.WrittenSpan.SequenceEqual(abr.Bytes.WrittenSpan));
+        Assert.True(Spread(abr) > Spread(cbr) * 1.5, $"spread cbr {Spread(cbr):F3} abr {Spread(abr):F3}");
+        Assert.True(abr.MaxLength > cbr.MaxLength, $"largest unit {cbr.MaxLength} vs {abr.MaxLength}");
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(1023)]
@@ -405,6 +434,106 @@ public class AacEncoderTests
             Assert.True(_inner.Length >= 0);
             _inner.Write(buffer, offset, count);
         }
+    }
+
+    private static List<string> TopLevelBoxes(byte[] file)
+    {
+        var names = new List<string>();
+        for (long pos = 0; pos < file.Length;)
+        {
+            long size = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(file.AsSpan((int)pos));
+            names.Add(System.Text.Encoding.ASCII.GetString(file, (int)pos + 4, 4));
+            if (size == 1) size = (long)System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(file.AsSpan((int)pos + 8));
+            Assert.True(size >= 8);
+            pos += size;
+            Assert.True(pos <= file.Length);
+        }
+        return names;
+    }
+
+    private static float[] ReadAll(string path)
+    {
+        using var dec = Audio.Open(path);
+        var got = new List<float>();
+        var buf = new float[4096 * dec.Format.Channels];
+        int n;
+        while ((n = dec.Read(buf)) > 0) got.AddRange(buf.AsSpan(0, n * dec.Format.Channels));
+        return got.ToArray();
+    }
+
+    [Fact]
+    public void FastStartPutsMoovFirstAndBothLayoutsHoldTheSameFile()
+    {
+        int rate = 44100, frames = rate * 2 + 77;
+        var pcm = Signal(rate, 2, frames);
+        string id = Guid.NewGuid().ToString("N")[..8];
+        string wav = Path.Combine(Scratch, "fs-" + id + ".wav"), fast = Path.ChangeExtension(wav, ".fast.m4a"), slow = Path.ChangeExtension(wav, ".slow.m4a");
+        try
+        {
+            using (var f = File.Create(wav)) WriteWav(f, rate, 2, pcm);
+            Audio.Transcode(wav, fast); // fast start is the default
+            Audio.Transcode(wav, slow, new TranscodeOptions { FastStart = false });
+            var fastBytes = File.ReadAllBytes(fast);
+            var slowBytes = File.ReadAllBytes(slow);
+            Assert.Equal(["ftyp", "moov", "mdat"], TopLevelBoxes(fastBytes));
+            Assert.Equal(["ftyp", "mdat", "moov"], TopLevelBoxes(slowBytes));
+            Assert.Equal(slowBytes.Length, fastBytes.Length);
+
+            // Same samples through our reader, and the same decoded audio.
+            var a = ReadAll(fast);
+            var b = ReadAll(slow);
+            Assert.Equal(frames * 2, a.Length);
+            Assert.True(a.AsSpan().SequenceEqual(b));
+
+            string? ffprobe = ContainerTestEnv.Ffprobe;
+            if (ffprobe is not null && File.Exists(ffprobe))
+            {
+                foreach (var path in new[] { fast, slow })
+                {
+                    var psi = new ProcessStartInfo(ffprobe) { RedirectStandardError = true, RedirectStandardOutput = true };
+                    foreach (var arg in new[] { "-v", "error", "-count_packets", "-select_streams", "a:0", "-show_entries", "stream=codec_name,nb_read_packets", "-of", "csv=p=0", path }) psi.ArgumentList.Add(arg);
+                    using var proc = Process.Start(psi)!;
+                    string output = proc.StandardOutput.ReadToEnd();
+                    string err = proc.StandardError.ReadToEnd();
+                    proc.WaitForExit();
+                    Assert.True(proc.ExitCode == 0 && err.Length == 0, err);
+                    Assert.Equal("aac," + (frames / 1024 + 2), output.Trim());
+                }
+            }
+        }
+        finally { File.Delete(wav); File.Delete(fast); File.Delete(slow); }
+    }
+
+    [Fact]
+    public void FastStartWriterShiftsAMultiChunkSizedFileAndRefusesChangesAfterFinish()
+    {
+        byte[] Build(bool fast, out MemoryStream ms)
+        {
+            ms = new MemoryStream();
+            ms.Write(new byte[5]); // the writer starts at the stream's current position
+            using var w = Mp4AudioWriter.CreateAac(ms, 44100, 2, new byte[] { 0x12, 0x10 }, 1024, leaveOpen: true);
+            w.FastStart = fast;
+            for (int i = 0; i < 3000; i++) w.AddSample(new byte[200 + i % 7], 1024);
+            w.Finish(3000 * 1024 - 1024);
+            return ms.ToArray()[5..];
+        }
+        var fastBytes = Build(true, out _);
+        var slowBytes = Build(false, out _);
+        Assert.Equal(["ftyp", "moov", "mdat"], TopLevelBoxes(fastBytes));
+        Assert.Equal(["ftyp", "mdat", "moov"], TopLevelBoxes(slowBytes));
+        foreach (var bytes in new[] { fastBytes, slowBytes })
+        {
+            using var src = Mp4PacketSource.Open(new MemoryStream(bytes), AudioLimits.Default, leaveOpen: false);
+            int count = 0;
+            while (src.TryReadPacket(out var pk)) { Assert.Equal(200 + count % 7, pk.Data.Length); count++; }
+            Assert.Equal(3000, count);
+        }
+        var w2 = Mp4AudioWriter.CreateAac(new MemoryStream(), 44100, 2, new byte[] { 0x12, 0x10 }, 1024);
+        w2.FastStart = true;
+        w2.AddSample(new byte[10], 1024);
+        w2.Finish(1);
+        Assert.Throws<InvalidOperationException>(() => w2.FastStart = false);
+        w2.Dispose();
     }
 
     [Fact]
