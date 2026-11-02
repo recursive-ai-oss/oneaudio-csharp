@@ -39,7 +39,7 @@ namespace OneAudio.Aac;
 /// <para>
 /// <b>Decoder agreement.</b> Decoders agree to within rounding (about 1e-7 of full scale) everywhere except in noise-substituted
 /// bands, which every decoder fills with its own noise of the coded energy: those bands match in energy, not sample by sample.
-/// Set <see cref="AacEncoderSettings.NoiseSubstitution"/> to false for output that decodes identically everywhere.
+/// Set <see cref="AacEncoderSettings.NoiseSubstitution"/> to false so that no band depends on a decoder's own noise generator.
 /// </para>
 /// After construction no allocation happens per block. Output is deterministic for identical input and settings on a platform.
 /// Channels and rate are fixed at construction; feed one encoder one stream. Instances are not thread-safe.
