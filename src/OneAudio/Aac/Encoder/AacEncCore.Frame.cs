@@ -28,7 +28,7 @@ internal sealed partial class AacEncCore
         Analyze(_seq);
         double target = TargetBits();
         float r = SelectShift(target, out bool avoid);
-        long bits = Trial(r, avoid);
+        Trial(r, avoid); // leaves the chosen quantization in the channel states
 
         var w = new AacBitWriter(_out);
         WriteBlock(ref w);
@@ -48,7 +48,6 @@ internal sealed partial class AacEncCore
         w.AlignZero();
         int length = w.ByteLength;
         if (length > _out.Length - 8) throw new InvalidOperationException("The AAC encoder produced an oversize block.");
-        _ = bits;
 
         _reservoir += _avgBits - length * 8.0;
         if (!_vbr) _reservoir = Math.Min(_reservoir, _reservoirMax);

@@ -3,6 +3,17 @@
 All notable changes to `RecursiveAI.OneAudio` are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is released. Until then, every `0.x` release may change the API.
 
+## [Unreleased]
+
+Packet-level encoders for building audio into other containers, and AAC-LC encoding. The API changes are additive.
+
+### Added
+
+- **`AacEncoder`**: an AAC-LC encoder for mono and stereo at 8000 to 48000 Hz. PCM in, raw access units out (`AacPacket`: bytes, index, timestamp, duration), plus the two-byte `AudioSpecificConfig` for an MP4 `esds` box; optional ADTS framing. Constant (with a bit reservoir), average and variable bit rate; long and short blocks with start and stop windows, per-band mid/side, perceptual noise substitution for bands above 4 kHz that would decode as holes, a Bark-scale threshold model and an exact bit-counting rate loop. No TNS, intensity stereo, LTP or SBR. `PrimingFrames` (1024) and `EndPaddingFrames` give a container what it needs for an edit list or `iTunSMPB`. Encoding allocates nothing per block.
+- **`FlacPacketEncoder`**: the FLAC encoder's analysis with frames as output (`FlacPacket`: bytes, first sample, duration, index) and the STREAMINFO bytes (`GetStreamInfo`, `GetStreamInfoBlock` for an MP4 `dfLa` box, `GetOggIdentificationPacket`), with the MD5 complete after `Finish`. Its frames are those of a native file made with the same settings.
+- **`Mp4AudioWriter`**: a single-track audio MP4 writer (`ftyp`, `mdat`, `moov` with `esds` or `dfLa`, `stts`/`stsz`/`stsc`/`stco`; for AAC an edit list and an `iTunSMPB` tag). The MP4 reader stays as it was.
+- **Happy path:** `Audio.Transcode` and `AudioKit.Transcode` write `.m4a`/`.mp4` (`AudioFileFormat.Aac`) and `.aac` (`AudioFileFormat.AacAdts`); `TranscodeOptions.Aac` holds the encoder settings. A source that AAC cannot take (more than two channels, or a rate outside 8000 to 48000 Hz) gets an `ArgumentException` that names the option to set. FLAC output already existed.
+
 ## [1.6.1] - 2026-11-01
 
 Fixes and clarifications for HE-AAC decoding. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.

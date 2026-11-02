@@ -19,7 +19,7 @@ internal static class HappySmoke
         var after = Audio.Measure(new AudioClip(toneFormat, tone));
         if (Math.Abs(after.IntegratedLufs - Audio.DefaultTargetLufs) > 0.1 || norm.GainDb <= 0) return Fail($"normalize ({after.IntegratedLufs})");
 
-        foreach (var format in new[] { AudioFileFormat.Wav, AudioFileFormat.Flac, AudioFileFormat.Opus })
+        foreach (var format in new[] { AudioFileFormat.Wav, AudioFileFormat.Flac, AudioFileFormat.Opus, AudioFileFormat.Aac, AudioFileFormat.AacAdts })
         {
             flac.Position = 0;
             using var output = new MemoryStream();
@@ -35,7 +35,7 @@ internal static class HappySmoke
         mixer.Render(block);
         if (block.AsSpan().IndexOfAnyExceptInRange(0f, 0f) < 0) return Fail("silent mix");
 
-        Console.WriteLine("ok: happy path load, resample, normalize, transcode (wav, flac, opus), play");
+        Console.WriteLine("ok: happy path load, resample, normalize, transcode (wav, flac, opus, m4a, adts), play");
         return 0;
     }
 

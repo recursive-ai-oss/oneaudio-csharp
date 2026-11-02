@@ -73,7 +73,65 @@ internal static class EncodeSmoke
         using (var fd = FlacDecoder.Open(viaDecoder))
             if (fd.VerifyMd5() != true) return Fail("re-encoded md5");
 
-        Console.WriteLine($"ok: encoders wrote wav and flac (level 0 {sizes[0]} bytes, level 8 {sizes[1]} bytes) and both read back exactly");
+        // Packet-level FLAC: frames out of the packet encoder decode bit-exactly as an Ogg-FLAC-style packet stream.
+        using (var pe = new FlacPacketEncoder(new AudioFormat(Rate, 2), new FlacEncoderSettings { BitsPerSample = 16 }))
+        {
+            var packets = new List<byte[]>();
+            var rest = pcm.AsSpan();
+            while (rest.Length > 0)
+            {
+                int taken = pe.WriteInteger(rest);
+                rest = rest[(taken * 2)..];
+                while (pe.TryReadPacket(out var p)) packets.Add(p.Data.ToArray());
+            }
+            pe.Finish();
+            while (pe.TryReadPacket(out var p)) packets.Add(p.Data.ToArray());
+            var native = new MemoryStream();
+            native.Write("fLaC"u8);
+            native.Write(pe.GetStreamInfoBlock());
+            foreach (var b in packets) native.Write(b);
+            native.Position = 0;
+            using var pd = FlacDecoder.Open(native);
+            var back = new int[pcm.Length];
+            if (pd.VerifyMd5() != true) return Fail("packet flac md5");
+            if (pd.ReadInteger(back) != Frames || !back.AsSpan().SequenceEqual(pcm)) return Fail("packet flac samples");
+        }
+
+        // AAC-LC: encode a tone to an MP4 in memory, read it back through the registered MP4 and AAC decoders.
+        {
+            var tone = new float[Rate * 2 * 2];
+            for (int i = 0; i < Rate * 2; i++)
+            {
+                tone[2 * i] = 0.4f * MathF.Sin(2 * MathF.PI * 440 * i / Rate);
+                tone[2 * i + 1] = 0.3f * MathF.Sin(2 * MathF.PI * 1320 * i / Rate);
+            }
+            var enc = new OneAudio.Aac.AacEncoder(Rate, 2, new OneAudio.Aac.AacEncoderSettings { Bitrate = 96_000 });
+            var mp4 = new MemoryStream();
+            using (var mw = OneAudio.Mp4.Mp4AudioWriter.CreateAac(mp4, Rate, 2, enc.AudioSpecificConfig, OneAudio.Aac.AacEncoder.PrimingFrames, leaveOpen: true))
+            {
+                var left = tone.AsSpan();
+                while (left.Length > 0)
+                {
+                    int taken = enc.Write(left);
+                    left = left[(taken * 2)..];
+                    while (enc.TryReadPacket(out var p)) mw.AddSample(p.Data.Span, p.Duration);
+                }
+                enc.Finish();
+                while (enc.TryReadPacket(out var p)) mw.AddSample(p.Data.Span, p.Duration);
+                mw.Finish(enc.FramesWritten);
+            }
+            mp4.Position = 0;
+            using var ad = AudioDecoder.Open(mp4, new AudioCodecRegistry().AddMp4().AddAac());
+            var got = new float[tone.Length];
+            int filled = 0, n;
+            while (filled < got.Length && (n = ad.Read(got.AsSpan(filled))) > 0) filled += n * 2;
+            if (filled != tone.Length || ad.LengthFrames != Rate * 2) return Fail("aac length");
+            double err = 0, sig = 0;
+            for (int i = 0; i < tone.Length; i++) { err += (got[i] - tone[i]) * (double)(got[i] - tone[i]); sig += tone[i] * (double)tone[i]; }
+            if (10 * Math.Log10(sig / err) < 20) return Fail("aac snr");
+        }
+
+        Console.WriteLine($"ok: encoders wrote wav, flac (level 0 {sizes[0]} bytes, level 8 {sizes[1]} bytes), packet flac and an AAC-LC MP4, and all read back");
         return 0;
     }
 

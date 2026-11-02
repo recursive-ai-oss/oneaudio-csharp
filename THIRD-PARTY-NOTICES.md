@@ -58,3 +58,11 @@ the Enhanced aacPlus codec, which refers to ISO/IEC 14496-3 for the AAC definiti
 `tools/gen-aac-tables.py` from the decoder part of that source; the decoder code itself is original. The ISO/IEC 14496-26
 conformance streams used by the tests are fetched on demand (`tools/fetch-aac-conformance.sh`) and not distributed with
 this repository.
+
+## 3GPP AAC-LC encoder constants
+
+The AAC-LC encoder (`src/OneAudio/Aac/Encoder`) is original code. Its psychoacoustic model takes a few numeric constants from the
+floating-point reference encoder of the Enhanced aacPlus codec in 3GPP TS 26.410 (the threshold-in-quiet table by Bark band,
+the signal-to-mask ratio of -29 dB, the spreading slopes, the pre-echo limits and the minimum signal-to-noise formula of the
+perceptual entropy), and the Huffman codebooks and scale factor band offsets of the decoder tables above. The syntax it writes is
+ISO/IEC 14496-3 4.4; the MP4 writer follows ISO/IEC 14496-12 and 14496-14.

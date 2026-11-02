@@ -231,7 +231,7 @@ public sealed class HappyPathTests : IDisposable
     public void Transcode_argument_and_failure_handling()
     {
         var wav = MakeWav("a.wav", frames: 4000);
-        Assert.Throws<ArgumentException>(() => Audio.Transcode(wav, P("out.mp4")));
+        Assert.Throws<ArgumentException>(() => Audio.Transcode(wav, P("out.mp3")));
         Assert.Throws<ArgumentException>(() => Audio.Transcode(wav, wav));
         using (var i = File.OpenRead(wav)) Assert.Throws<ArgumentException>(() => Audio.Transcode(i, new MemoryStream(), new TranscodeOptions()));
         var bad = P("bad.wav");

@@ -194,4 +194,41 @@ public class FlacPacketEncoderTests
             }
         }
     }
+
+    [Fact]
+    public void FlacInMp4MadeByTheWriterDecodesBitExactInFfmpeg()
+    {
+        string? ffmpeg = ContainerTestEnv.Ffmpeg;
+        Assert.SkipUnless(ffmpeg is not null && File.Exists(ffmpeg), "ffmpeg not found.");
+        foreach (var (bits, ch, rate) in new[] { (16, 2, 44100), (24, 1, 48000) })
+        {
+            var src = EncoderSignals.Make("music", bits, ch, 20000, rate);
+            var (list, bytes, enc) = Run(src, bits, ch, rate, null, 2500);
+            string dir = Environment.GetEnvironmentVariable("TMPDIR") is { Length: > 0 } t ? t : Path.GetTempPath();
+            string path = Path.Combine(dir, "oneaudio-flacmp4-" + Guid.NewGuid().ToString("N")[..8] + ".mp4");
+            try
+            {
+                using (var f = File.Create(path))
+                using (var w = OneAudio.Mp4.Mp4AudioWriter.CreateFlac(f, rate, ch, bits, leaveOpen: true))
+                {
+                    for (int i = 0; i < bytes.Count; i++) w.AddSample(bytes[i], list[i].Samples);
+                    w.Finish(20000, enc.GetStreamInfoBlock());
+                }
+                var psi = new ProcessStartInfo(ffmpeg!) { RedirectStandardError = true, RedirectStandardOutput = true };
+                foreach (var a in new[] { "-v", "error", "-i", path, "-f", "s32le", "-" }) psi.ArgumentList.Add(a);
+                using var p = Process.Start(psi)!;
+                using var o = new MemoryStream();
+                p.StandardOutput.BaseStream.CopyTo(o);
+                string err = p.StandardError.ReadToEnd();
+                p.WaitForExit();
+                Assert.True(p.ExitCode == 0 && err.Length == 0, err);
+                var raw = o.ToArray();
+                Assert.Equal(src.Length * 4, raw.Length);
+                int shift = 32 - bits;
+                for (int i = 0; i < src.Length; i++)
+                    Assert.Equal(src[i] << shift, BitConverter.ToInt32(raw, 4 * i));
+            }
+            finally { File.Delete(path); }
+        }
+    }
 }
