@@ -10,6 +10,13 @@ namespace OneAudio.Aac;
 /// skipped. The behaviour of each tool follows ISO/IEC 14496-3 as reproduced by 3GPP TS 26.410.
 /// </para>
 /// <para>
+/// <b>Comparing with other decoders.</b> In bands coded with perceptual noise substitution the standard fixes only the band's
+/// energy, and each decoder fills it with noise of its own (ISO/IEC 14496-3 4.6.13). Output there matches another decoder's in
+/// energy, not sample by sample, so waveform differences of the order of the band's level are expected wherever an encoder
+/// used it (many encoders do on noise-like content above a few kHz). Compare band energies there; elsewhere output agrees
+/// with other conforming decoders to float rounding.
+/// </para>
+/// <para>
 /// <b>HE-AAC.</b> SBR (ISO/IEC 14496-3 4.6.18, in the complex-valued high-quality form) turns a core at rate f into output
 /// at 2f, up to 96 kHz; parametric stereo (4.6.19) makes a stereo output from a mono core. Mono and stereo cores, including
 /// coupled channel pairs, work at core rates from 8 to 48 kHz. All three signalling forms work: explicit hierarchical
