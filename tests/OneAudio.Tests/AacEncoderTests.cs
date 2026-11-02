@@ -9,31 +9,49 @@ public class AacEncoderTests
 {
     private static string Scratch => Environment.GetEnvironmentVariable("TMPDIR") is { Length: > 0 } t ? t : Path.GetTempPath();
 
-    /// <summary>Music-like test signal: harmonic tones with vibrato, a decaying noise burst train and a little hiss, in [-0.7, 0.7].</summary>
-    internal static float[] Signal(int rate, int channels, int frames, int seed = 1)
+    // These tests keep their garbage small: other tests in the assembly assert that no garbage collection happens during their
+    // (short) windows, and the collection count is process-wide.
+    private static readonly Dictionary<(int, int, int), float[]> SignalCache = [];
+
+    /// <summary>Music-like test signal: harmonic tones with vibrato, a decaying noise burst train and a little hiss, in [-0.7, 0.7]. Cached; do not modify.</summary>
+    internal static float[] Signal(int rate, int channels, int frames)
     {
-        var rng = new Random(seed);
-        var s = new float[frames * channels];
-        for (int c = 0; c < channels; c++)
+        lock (SignalCache)
         {
-            double ph = 0;
-            for (int i = 0; i < frames; i++)
+            if (SignalCache.TryGetValue((rate, channels, frames), out var cached)) return cached;
+            var rng = new Random(1);
+            var s = new float[frames * channels];
+            for (int c = 0; c < channels; c++)
             {
-                double t = i / (double)rate;
-                ph += 2 * Math.PI * (220 * (c + 1) + 5 * Math.Sin(2 * Math.PI * 5 * t)) / rate;
-                double v = 0.25 * Math.Sin(ph) + 0.12 * Math.Sin(2 * ph) + 0.06 * Math.Sin(3 * ph);
-                double burst = Math.Exp(-((t * 3) % 1) * 40);
-                v += 0.3 * burst * (rng.NextDouble() - 0.5);
-                v += 0.004 * (rng.NextDouble() - 0.5);
-                s[i * channels + c] = (float)v;
+                double ph = 0;
+                for (int i = 0; i < frames; i++)
+                {
+                    double t = i / (double)rate;
+                    ph += 2 * Math.PI * (220 * (c + 1) + 5 * Math.Sin(2 * Math.PI * 5 * t)) / rate;
+                    double v = 0.25 * Math.Sin(ph) + 0.12 * Math.Sin(2 * ph) + 0.06 * Math.Sin(3 * ph);
+                    double burst = Math.Exp(-((t * 3) % 1) * 40);
+                    v += 0.3 * burst * (rng.NextDouble() - 0.5);
+                    v += 0.004 * (rng.NextDouble() - 0.5);
+                    s[i * channels + c] = (float)v;
+                }
             }
+            return SignalCache[(rate, channels, frames)] = s;
         }
-        return s;
     }
 
-    internal static List<byte[]> EncodeAll(AacEncoder enc, ReadOnlySpan<float> pcm, int chunkFrames)
+    /// <summary>The units of one encode, back to back, with their lengths.</summary>
+    internal sealed class Encoded
     {
-        var units = new List<byte[]>();
+        public readonly MemoryStream Bytes = new();
+        public readonly List<int> Lengths = [];
+        public int Count => Lengths.Count;
+        public byte[] ToArray() => Bytes.ToArray();
+        public int MaxLength => Lengths.Max();
+    }
+
+    internal static Encoded EncodeAll(AacEncoder enc, ReadOnlySpan<float> pcm, int chunkFrames)
+    {
+        var units = new Encoded();
         int ch = enc.Channels;
         for (int pos = 0; pos < pcm.Length;)
         {
@@ -43,11 +61,11 @@ public class AacEncoderTests
             {
                 int taken = enc.Write(span);
                 span = span[(taken * ch)..];
-                while (enc.TryReadPacket(out var p)) units.Add(p.Data.ToArray());
+                while (enc.TryReadPacket(out var p)) { units.Bytes.Write(p.Data.Span); units.Lengths.Add(p.Data.Length); }
             }
         }
         enc.Finish();
-        while (enc.TryReadPacket(out var p)) units.Add(p.Data.ToArray());
+        while (enc.TryReadPacket(out var p)) { units.Bytes.Write(p.Data.Span); units.Lengths.Add(p.Data.Length); }
         return units;
     }
 
@@ -58,21 +76,24 @@ public class AacEncoderTests
         w.Finish();
     }
 
-    private static float[] Decode(byte[] adts, out AudioFormat format)
+    /// <summary>Decodes an ADTS stream whose decoded length (in frames) is known to the caller.</summary>
+    private static float[] Decode(Encoded units, int channels, out AudioFormat format)
     {
-        using var dec = Audio.Open(new MemoryStream(adts));
+        units.Bytes.Position = 0;
+        using var dec = Audio.Open(units.Bytes, leaveOpen: true);
         format = dec.Format;
-        var all = new List<float>();
-        var buf = new float[4096 * dec.Format.Channels];
-        int n;
-        while ((n = dec.Read(buf)) > 0) all.AddRange(buf.AsSpan(0, n * dec.Format.Channels).ToArray());
-        return [.. all];
+        var all = new float[units.Count * 1024 * channels];
+        int filled = 0, n;
+        while (filled < all.Length && (n = dec.Read(all.AsSpan(filled))) > 0) filled += n * channels;
+        Assert.Equal(all.Length, filled);
+        Assert.Equal(0, dec.Read(new float[2 * channels]));
+        return all;
     }
 
-    private static double SnrDb(float[] reference, float[] decoded, int skip = 0)
+    private static double SnrDb(ReadOnlySpan<float> reference, ReadOnlySpan<float> decoded)
     {
         double sig = 0, err = 0;
-        for (int i = skip; i < reference.Length; i++)
+        for (int i = 0; i < reference.Length; i++)
         {
             double d = decoded[i] - reference[i];
             sig += (double)reference[i] * reference[i];
@@ -85,27 +106,23 @@ public class AacEncoderTests
     [InlineData(44100, 2, 128000)]
     [InlineData(48000, 2, 64000)]
     [InlineData(32000, 1, 48000)]
-    [InlineData(24000, 2, 96000)]
     [InlineData(22050, 1, 32000)]
     [InlineData(16000, 1, 32000)]
     [InlineData(11025, 2, 48000)]
     [InlineData(8000, 1, 24000)]
     public void AdtsStreamDecodesToTheInputLength(int rate, int channels, int bitrate)
     {
-        int frames = rate * 3 + 77;
+        int frames = rate * 2 + 77;
         var pcm = Signal(rate, channels, frames);
         var enc = new AacEncoder(rate, channels, new AacEncoderSettings { Bitrate = bitrate, Adts = true });
         var units = EncodeAll(enc, pcm, 1500);
         Assert.Equal((frames + 1023) / 1024 + 1, units.Count);
         Assert.Equal(units.Count * 1024 - AacEncoder.PrimingFrames - frames, enc.EndPaddingFrames);
-        var adts = units.SelectMany(u => u).ToArray();
-        var dec = Decode(adts, out var fmt);
+        var dec = Decode(units, channels, out var fmt);
         Assert.Equal(rate, fmt.SampleRate);
         Assert.Equal(channels, fmt.Channels);
-        // The ADTS reader has no edit list: the decoder returns every unit's output, priming first.
-        Assert.Equal(units.Count * 1024, dec.Length / channels);
-        var aligned = dec.AsSpan(AacEncoder.PrimingFrames * channels, frames * channels).ToArray();
-        double snr = SnrDb(pcm, aligned);
+        // The decoder returns every unit's output, priming first (an ADTS stream has no edit list).
+        double snr = SnrDb(pcm, dec.AsSpan(AacEncoder.PrimingFrames * channels, frames * channels));
         Assert.True(snr > 14, $"SNR {snr:F1} dB");
     }
 
@@ -115,30 +132,30 @@ public class AacEncoderTests
     [InlineData(192000)]
     public void CbrBitrateIsWithinFivePercent(int bitrate)
     {
-        var pcm = Signal(44100, 2, 44100 * 20);
+        var pcm = Signal(44100, 2, 44100 * 8);
         var enc = new AacEncoder(44100, 2, new AacEncoderSettings { Bitrate = bitrate });
         var units = EncodeAll(enc, pcm, 4096);
         double seconds = units.Count * 1024 / 44100.0;
-        double kbps = units.Sum(u => (long)u.Length) * 8 / seconds;
+        double kbps = units.Bytes.Length * 8 / seconds;
         Assert.InRange(kbps / bitrate, 0.95, 1.05);
     }
 
     [Fact]
     public void VbrAndAbrProduceDecodableStreamsAndVbrFollowsQuality()
     {
-        var pcm = Signal(44100, 2, 44100 * 6);
+        var pcm = Signal(44100, 2, 44100 * 4);
         long Size(AacRateControl m, double q)
         {
             var enc = new AacEncoder(44100, 2, new AacEncoderSettings { Bitrate = 128000, RateControl = m, VbrQuality = q, Adts = true });
             var units = EncodeAll(enc, pcm, 4096);
-            var dec = Decode(units.SelectMany(u => u).ToArray(), out _);
-            Assert.True(SnrDb(pcm, dec.AsSpan(2048, pcm.Length).ToArray()) > 6);
-            return units.Sum(u => (long)u.Length);
+            var dec = Decode(units, 2, out _);
+            Assert.True(SnrDb(pcm, dec.AsSpan(2048, pcm.Length)) > 6);
+            return units.Bytes.Length;
         }
         long low = Size(AacRateControl.Vbr, 0.1), high = Size(AacRateControl.Vbr, 0.9);
         Assert.True(high > low * 1.3, $"{low} vs {high}");
         long abr = Size(AacRateControl.Abr, 0);
-        Assert.InRange(abr * 8 / 6.0 / 128000, 0.9, 1.05);
+        Assert.InRange(abr * 8 / 4.0 / 128000, 0.9, 1.05);
     }
 
     [Theory]
@@ -156,7 +173,7 @@ public class AacEncoderTests
         var units = EncodeAll(enc, pcm, 333);
         if (frames == 0)
         {
-            Assert.Empty(units);
+            Assert.Equal(0, units.Count);
             return;
         }
         int expectUnits = (frames + 1023) / 1024 + 1;
@@ -164,8 +181,7 @@ public class AacEncoderTests
         Assert.Equal(expectUnits * 1024 - 1024 - frames, enc.EndPaddingFrames);
         Assert.InRange(enc.EndPaddingFrames, 0, 1023);
         Assert.Equal(frames, enc.FramesWritten);
-        var dec = Decode(units.SelectMany(u => u).ToArray(), out _);
-        Assert.Equal(expectUnits * 1024, dec.Length / 2);
+        Decode(units, 2, out _); // the decoded length equals the unit count times 1024
     }
 
     [Fact]
@@ -173,10 +189,10 @@ public class AacEncoderTests
     {
         // Constant bit rate pads silence up to the nominal rate; variable bit rate does not.
         var enc = new AacEncoder(44100, 2, new AacEncoderSettings { Adts = true, RateControl = AacRateControl.Vbr });
-        var units = EncodeAll(enc, new float[44100 * 2 * 2], 4096);
-        Assert.All(units, u => Assert.True(u.Length < 120, $"{u.Length} bytes"));
-        var dec = Decode(units.SelectMany(u => u).ToArray(), out _);
-        Assert.All(dec, v => Assert.Equal(0f, v));
+        var units = EncodeAll(enc, new float[44100 * 2], 4096);
+        Assert.True(units.MaxLength < 120, $"{units.MaxLength} bytes");
+        var dec = Decode(units, 2, out _);
+        for (int i = 0; i < dec.Length; i++) Assert.True(dec[i] == 0f, $"sample {i} is {dec[i]}");
     }
 
     [Theory]
@@ -184,7 +200,7 @@ public class AacEncoderTests
     [InlineData(2)]
     public void FullScaleSquareWaveAndClippingInputStayValid(int channels)
     {
-        int rate = 44100, frames = rate * 2;
+        int rate = 44100, frames = rate;
         var pcm = new float[frames * channels];
         for (int i = 0; i < frames; i++)
             for (int c = 0; c < channels; c++)
@@ -195,10 +211,9 @@ public class AacEncoderTests
         {
             var enc = new AacEncoder(rate, channels, new AacEncoderSettings { Bitrate = 96000 * channels / 2 + 32000, RateControl = mode, Adts = true });
             var units = EncodeAll(enc, pcm, 1024);
-            Assert.All(units, u => Assert.True(u.Length <= enc.MaxPacketBytes));
-            var dec = Decode(units.SelectMany(u => u).ToArray(), out _);
-            Assert.Equal(units.Count * 1024, dec.Length / channels);
-            Assert.True(SnrDb(pcm.AsSpan(1000).ToArray(), dec.AsSpan(1024 * channels + 1000, pcm.Length - 1000).ToArray()) > 3);
+            Assert.True(units.MaxLength <= enc.MaxPacketBytes);
+            var dec = Decode(units, channels, out _);
+            Assert.True(SnrDb(pcm.AsSpan(1000), dec.AsSpan(1024 * channels + 1000, pcm.Length - 1000)) > 3);
         }
     }
 
@@ -249,11 +264,11 @@ public class AacEncoderTests
     [Fact]
     public void OutputIsDeterministic()
     {
-        var pcm = Signal(44100, 2, 44100 * 2);
+        var pcm = Signal(44100, 2, 44100);
         byte[] Run()
         {
             var enc = new AacEncoder(44100, 2, new AacEncoderSettings { Adts = true });
-            return EncodeAll(enc, pcm, 777).SelectMany(u => u).ToArray();
+            return EncodeAll(enc, pcm, 777).ToArray();
         }
         Assert.True(Run().AsSpan().SequenceEqual(Run()));
     }
@@ -263,7 +278,7 @@ public class AacEncoderTests
     {
         foreach (var channels in new[] { 1, 2 })
         {
-            var pcm = Signal(44100, channels, 44100 * 4);
+            var pcm = Signal(44100, channels, 44100 * 3);
             var enc = new AacEncoder(44100, channels, new AacEncoderSettings { Bitrate = 64000 * channels });
             int hop = 1024 * channels;
             // Warm up: JIT, tiered compilation and every static table.
@@ -350,7 +365,7 @@ public class AacEncoderTests
                 int skip = format == AudioFileFormat.Aac ? 0 : AacEncoder.PrimingFrames * ch;
                 Assert.True(dec.Length - skip >= frames * ch, $"{dec.Length / ch} frames");
                 Assert.True(dec.Length - skip < (frames + 1024) * ch);
-                Assert.True(SnrDb(pcm, dec.AsSpan(skip, pcm.Length).ToArray()) > 14);
+                Assert.True(SnrDb(pcm, dec.AsSpan(skip, pcm.Length)) > 14);
             }
             finally { File.Delete(path); File.Delete(raw); }
         }
