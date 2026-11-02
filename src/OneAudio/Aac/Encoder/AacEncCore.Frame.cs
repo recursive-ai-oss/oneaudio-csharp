@@ -70,6 +70,17 @@ internal sealed partial class AacEncCore
             target = _avgBits * scale * Math.Pow(Math.Clamp(ratio, 0.2, 5.0), 0.8);
             target = Math.Clamp(target, 0.15 * _avgBits, Math.Min(_maxFrameBits, 4.0 * _avgBits));
         }
+        else if (_abr)
+        {
+            // Bits follow the block's perceptual entropy; the reservoir level steers the whole curve so the mean settles on the
+            // nominal rate (equilibrium at a quarter full). Frames may be far from the mean in both directions, but never spend
+            // more than the reservoir holds, so the stream never exceeds its average.
+            double frac = Math.Clamp(_reservoir / _reservoirMax, 0, 1);
+            double steer = 1 + 0.8 * (frac - 0.25);
+            target = _avgBits * steer * Math.Pow(Math.Clamp(ratio, 0.2, 5.0), 0.9);
+            target = Math.Min(target, _avgBits + Math.Max(_reservoir, 0));
+            target = Math.Clamp(target, 0.2 * _avgBits, _maxFrameBits);
+        }
         else
         {
             double frac = _reservoirMax > 0 ? Math.Clamp(_reservoir / _reservoirMax, 0, 1) : 1;

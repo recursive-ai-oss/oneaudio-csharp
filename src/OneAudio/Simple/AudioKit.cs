@@ -396,15 +396,15 @@ public sealed class AudioKit
             }
             case AudioFileFormat.Aac:
             case AudioFileFormat.AacAdts:
-                frames = EncodeAac(source, format == AudioFileFormat.AacAdts, options.Aac, output, ct);
+                frames = EncodeAac(source, format == AudioFileFormat.AacAdts, options.Aac, options.FastStart, output, ct);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(format));
         }
-        return new TranscodeResult(format, new AudioFormat(fmt.SampleRate, fmt.Channels, fmt.ChannelMask), frames);
+        return new TranscodeResult(format, fmt, frames);
     }
 
-    private static long EncodeAac(IAudioDecoder source, bool adts, AacEncoderSettings? settings, Stream output, CancellationToken ct)
+    private static long EncodeAac(IAudioDecoder source, bool adts, AacEncoderSettings? settings, bool fastStart, Stream output, CancellationToken ct)
     {
         var fmt = source.Format;
         if (fmt.Channels > 2)
@@ -425,6 +425,7 @@ public sealed class AudioKit
         var target = output.CanSeek ? output : new MemoryStream();
         using (var writer = Mp4AudioWriter.CreateAac(target, fmt.SampleRate, fmt.Channels, enc.AudioSpecificConfig, AacEncoder.PrimingFrames, leaveOpen: true))
         {
+            if (fastStart && target.CanRead) writer.FastStart = true;
             Pump(source, enc, buffer, p => writer.AddSample(p.Data.Span, p.Duration), ct);
             writer.Finish(enc.FramesWritten);
         }
@@ -474,7 +475,7 @@ public sealed class AudioKit
     // Creates the file, runs the writer, and removes the partial file if anything fails.
     private static T WriteFile<T>(string path, Func<Stream, T> write)
     {
-        var file = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 4096);
+        var file = new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096);
         try
         {
             var result = write(file);

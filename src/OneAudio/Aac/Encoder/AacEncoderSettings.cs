@@ -11,8 +11,10 @@ public enum AacRateControl
     Cbr = 0,
 
     /// <summary>
-    /// Average bit rate: like <see cref="Cbr"/> but with a deeper reservoir (about eight blocks), so quality follows the music
-    /// more closely while the file still averages <see cref="AacEncoderSettings.Bitrate"/>.
+    /// Average bit rate: block sizes follow the material's perceptual entropy, steered by a reservoir of about eight blocks that is
+    /// not bounded by the standard's per-block limit (the stream makes no constant-rate promise), so sizes vary much more than in
+    /// <see cref="Cbr"/> while the file still averages <see cref="AacEncoderSettings.Bitrate"/> (within a few percent on any
+    /// material; never above it by more than the last block, below it only by what the reservoir holds at the end).
     /// </summary>
     Abr = 1,
 

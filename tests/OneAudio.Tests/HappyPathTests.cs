@@ -189,6 +189,33 @@ public sealed class HappyPathTests : IDisposable
     }
 
     [Fact]
+    public void TranscodeResult_input_describes_the_source_not_the_output()
+    {
+        var wav = MakeWav("r.wav", frames: 44100, type: NativeSampleType.PcmSigned24);
+        var toAac = Audio.Transcode(wav, P("r.m4a"));
+        Assert.Equal(AudioFileFormat.Aac, toAac.Format);
+        Assert.Equal(NativeSampleType.PcmSigned24, toAac.Input.NativeType);
+        Assert.Equal(24, toAac.Input.BitsPerSample);
+        Assert.Equal((44100, 2), (toAac.Input.SampleRate, toAac.Input.Channels));
+
+        var toFlac = Audio.Transcode(wav, P("r.flac"));
+        Assert.Equal(AudioFileFormat.Flac, toFlac.Format);
+        Assert.Equal(NativeSampleType.PcmSigned24, toFlac.Input.NativeType);
+        Assert.Equal(24, toFlac.Input.BitsPerSample);
+
+        // FLAC source to AAC: the source is lossless 24-bit, whatever the output is.
+        var flacToAac = Audio.Transcode(P("r.flac"), P("r2.m4a"));
+        Assert.Equal(AudioFileFormat.Aac, flacToAac.Format);
+        Assert.Equal(NativeSampleType.PcmSigned24, flacToAac.Input.NativeType);
+        Assert.Equal(24, flacToAac.Input.BitsPerSample);
+
+        // Conversion changes rate and channels, not the source's sample type.
+        var conv = Audio.Transcode(wav, P("r3.m4a"), new TranscodeOptions { SampleRate = 48000, Channels = 1 });
+        Assert.Equal((48000, 1), (conv.Input.SampleRate, conv.Input.Channels));
+        Assert.Equal(NativeSampleType.PcmSigned24, conv.Input.NativeType);
+    }
+
+    [Fact]
     public void Transcode_to_opus_decodes_with_the_expected_length()
     {
         var wav = MakeWav("a.wav", frames: 48000 * 2, rate: 48000);
@@ -210,7 +237,7 @@ public sealed class HappyPathTests : IDisposable
     {
         var wav = MakeWav("a.wav");
         var r = Audio.Transcode(wav, P("c.flac"), new TranscodeOptions { SampleRate = 22050, Channels = 1 });
-        Assert.Equal(new AudioFormat(22050, 1, AudioFormat.DefaultMask(1)), r.Input);
+        Assert.Equal(new AudioFormat(22050, 1, AudioFormat.DefaultMask(1), NativeSampleType.PcmSigned16, 16), r.Input);
         Assert.Equal(22050 * 3, r.Frames);
         using var d = Audio.Open(P("c.flac"));
         Assert.Equal(22050, d.Format.SampleRate);

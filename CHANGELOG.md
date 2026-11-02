@@ -5,6 +5,20 @@ versions follow [Semantic Versioning](https://semver.org/) once 1.0.0 is release
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-11-02
+
+Fixes to the AAC encoder, the MP4 writer and the transcode result. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.
+
+### Fixed
+
+- **`AacRateControl.Abr` now differs from `Cbr`.** The ABR reservoir was capped at the same size as CBR's at 96 kbit/s and above, so both modes produced identical bytes. ABR now follows the material's perceptual entropy with a reservoir of about eight blocks that is not bounded by the per-block limit; block sizes vary much more than with CBR (on a test of easy and hard halves, the relative spread of unit sizes was 0.30 against 0.13) while the file still averages the target within 5 %. At 128 kbit/s stereo on five held-out SQAM excerpts the ViSQOL MOS-LQO was 4.673 at 127.2 kbit/s for ABR against 4.672 at 127.9 for CBR; CBR output is unchanged.
+- **`TranscodeResult.Input`** described a lossy output (`NativeType` Lossy, `BitsPerSample` 0) for AAC. It now describes the source's own sample type and bit depth, with the sample rate and channels after any conversion.
+- **Documentation.** The `AacEncoder` XML doc said the encoder has no PNS (it has: on by default, `NoiseSubstitution`) and cited TS 26.403 for the model (the floating-point reference encoder of TS 26.410 was the source). The README claimed our decode of the encoder's M4As gives the same samples as ffmpeg's; it does so to about 1e-7 outside noise-substituted bands, which match in energy but not sample by sample because each decoder generates its own noise. `NoiseSubstitution = false` turns noise substitution off, so no band depends on a decoder's own noise generator.
+
+### Added
+
+- **`Mp4AudioWriter.FastStart`** writes `moov` before the media data, so progressive playback can start before the download ends. The data is moved forward once inside the stream (one extra pass, 1 MiB of memory; the stream must be readable). **`TranscodeOptions.FastStart`** (default true) applies it to `.m4a`/`.mp4` output from `Audio.Transcode`; set it false for the old layout. Transcoding to a file now opens it for read and write.
+
 ## [1.7.0] - 2026-11-02
 
 Packet-level encoders for building audio into other containers, and AAC-LC encoding. `RecursiveAI.OneAudio.Devices` changes only its version number. The API changes are additive.
